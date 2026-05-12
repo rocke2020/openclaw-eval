@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from eval_memory_verify import diff_memory_snapshots, snapshot_memory_files
+from lib.memory_verify import diff_memory_snapshots, snapshot_memory_files
 
 
 class EvalMemoryVerifyTests(unittest.TestCase):

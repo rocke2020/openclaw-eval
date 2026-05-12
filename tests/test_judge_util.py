@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from eval_artifacts import per_category_summary
-from judge_util import load_answers, locomo_grader
+from lib.artifacts import per_category_summary
+from lib.judge_util import load_answers, locomo_grader
 
 
 class _Message:

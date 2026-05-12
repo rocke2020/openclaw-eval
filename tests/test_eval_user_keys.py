@@ -1,11 +1,9 @@
 import argparse
 import asyncio
-import importlib
 import unittest
 from unittest import mock
 
-
-eval_module = importlib.import_module("eval")
+import main as eval_module
 
 
 def locomo_sample(sample_id: str) -> dict:

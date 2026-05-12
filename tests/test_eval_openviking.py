@@ -2,13 +2,13 @@ import json
 import unittest
 from unittest import mock
 
-from eval_openviking import add_memory, normalize_search_output
+from lib.openviking import add_memory, normalize_search_output
 
 
 class EvalOpenVikingTests(unittest.TestCase):
     def test_openviking_add_memory_command_includes_user_and_agent(self):
         result = mock.Mock(returncode=0, stdout="ok", stderr="")
-        with mock.patch("eval_openviking.subprocess.run", return_value=result) as run:
+        with mock.patch("lib.openviking.subprocess.run", return_value=result) as run:
             add_memory("hello", "acct", "user-1", "agent-1")
         argv = run.call_args.args[0]
         self.assertIn("--user", argv)

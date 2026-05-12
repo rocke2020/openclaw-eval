@@ -2,12 +2,17 @@
 
 ## Project Structure & Module Organization
 
-This repository is a Python 3.13 harness for strict LoCoMo-style memory benchmarks. Top-level modules contain runtime code:
+This repository is a Python 3.13 harness for strict LoCoMo-style memory benchmarks.
 
-- `eval.py` is the main CLI for ingest, QA, and backend comparison runs.
-- `judge.py`, `judge_util.py`, and `eval_artifacts.py` handle grading and artifact output.
-- `eval_openclaw.py`, `eval_openviking.py`, and `eval_backends.py` provide backend adapters.
-- `eval_locomo.py` and `eval_memory_verify.py` handle dataset parsing and memory-write verification.
+- `main.py` is the single CLI entry point with subcommands: `ingest`, `qa`, `compare`, `judge`.
+- `lib/` contains all library modules:
+  - `artifacts.py` — run directory helpers, manifest building, HTML report rendering.
+  - `backends.py` — backend registry (OpenClaw, OpenViking) and comparison helpers.
+  - `openclaw.py` — OpenClaw Responses API client and session management.
+  - `openviking.py` — OpenViking CLI adapter.
+  - `locomo.py` — LoCoMo dataset loading, formatting, and QA selection.
+  - `memory_verify.py` — memory-write verification via file snapshot diffing.
+  - `judge_util.py` — LLM grading logic and answer loading.
 - `tests/` contains unit tests named `test_*.py`.
 - `docs/` contains setup notes; `data/`, `locomo10*.json`, and `output/` hold fixtures, local benchmark data, and run artifacts.
 
@@ -16,8 +21,8 @@ This repository is a Python 3.13 harness for strict LoCoMo-style memory benchmar
 - `uv sync` installs the locked Python environment from `pyproject.toml` and `uv.lock`.
 - `PYTHONPATH=. uv run pytest` runs the full test suite.
 - `PYTHONPATH=. uv run pytest tests/test_eval_locomo.py` runs one test file while iterating.
-- `uv run python eval.py --help` shows available benchmark CLI modes.
-- `uv run python eval.py ingest ./locomo10_small.json --run-dir output/runs/dev-smoke --sample 0 --sessions 1-1` runs a small ingest smoke test.
+- `uv run python main.py --help` shows available benchmark CLI modes.
+- `uv run python main.py ingest ./locomo10_small.json --run-dir output/runs/dev-smoke --sample 0 --sessions 1-1` runs a small ingest smoke test.
 
 ## Coding Style & Naming Conventions
 

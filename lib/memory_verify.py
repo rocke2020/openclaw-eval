@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from eval_artifacts import sha256_file
+from lib.artifacts import sha256_file
 
 
 def snapshot_memory_files(workspace: str) -> dict[str, dict]:

@@ -1,6 +1,6 @@
 import unittest
 
-from eval_locomo import select_qas
+from lib.locomo import select_qas
 
 
 class EvalLocomoTests(unittest.TestCase):

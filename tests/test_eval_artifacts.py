@@ -5,15 +5,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from eval_artifacts import (
+from lib.artifacts import (
     render_comparison_report_html,
     render_report_html,
     sha256_file,
     write_answers,
     write_manifest,
 )
-import eval as eval_module
-from eval import select_canary_pairs
+import main as main_module
+from main import select_canary_pairs
 
 
 class EvalArtifactsTests(unittest.TestCase):
@@ -112,10 +112,10 @@ class EvalArtifactsTests(unittest.TestCase):
                 viking=False,
             )
             with (
-                mock.patch.object(eval_module, "_call_answer", return_value=("hello", {})),
-                mock.patch.object(eval_module, "_maybe_reset_session"),
+                mock.patch.object(main_module, "_call_answer", return_value=("hello", {})),
+                mock.patch.object(main_module, "_maybe_reset_session"),
             ):
-                eval_module.run_qa(args)
+                main_module.run_qa(args)
 
             self.assertTrue((run_dir / "manifest.json").exists())
             self.assertTrue((run_dir / "qa.jsonl").exists())

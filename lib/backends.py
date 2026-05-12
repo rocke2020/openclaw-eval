@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from eval_openclaw import send_message
-from eval_openviking import add_memory, search
+from lib.openclaw import send_message
+from lib.openviking import add_memory, search
 
 
 class MemoryBackend(Protocol):

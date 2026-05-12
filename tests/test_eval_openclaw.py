@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from eval_openclaw import get_session_id, reset_session, send_message
+from lib.openclaw import get_session_id, reset_session, send_message
 
 
 class EvalOpenClawTests(unittest.TestCase):
@@ -21,7 +21,7 @@ class EvalOpenClawTests(unittest.TestCase):
         }
         response.raise_for_status.return_value = None
 
-        with mock.patch("eval_openclaw.requests.post", return_value=response) as post:
+        with mock.patch("lib.openclaw.requests.post", return_value=response) as post:
             text, usage = send_message(
                 "http://127.0.0.1:19002",
                 "token",

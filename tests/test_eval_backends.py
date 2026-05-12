@@ -1,6 +1,6 @@
 import unittest
 
-from eval_backends import OpenClawBackend, backend_run_dir, build_backend
+from lib.backends import OpenClawBackend, backend_run_dir, build_backend
 
 
 class Args:
