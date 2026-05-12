@@ -27,6 +27,22 @@ Every number in the final table must trace back to reproducible run artifacts: `
 
 The table must also name the dataset scope. A sampled run is valid for pipeline validation, but final claims should say exactly what was run, such as `locomo10_small.json`, `locomo10.json --sample 0 --sessions 1-4`, or all of `locomo10.json`. Do not imply that a subset result represents the full LoCoMo10 file.
 
+## Smoke Run Reference
+
+A sampled builtin-memory smoke run gives a rough cost feel for pipeline validation only. Do not use this as a final benchmark row.
+
+```text
+Dataset: locomo10_small.json
+Backend: oo-builtin / OpenClaw builtin memory-core
+Samples: 1
+Sessions: 4
+QA: 50
+Judge result: 29/50 correct = 58.00%
+Input tokens: 75,240 ingest + 74,880 QA = 150,120
+```
+
+This run was for pipeline validation. Final comparison rows must be regenerated from a clean git state, fresh agent/workspace, declared dataset scope, and artifact-backed judge output.
+
 ## Setup
 
 ```bash
