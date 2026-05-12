@@ -10,9 +10,11 @@
 
 ---
 
-## Current Diagnosis
+## Orig
 
-This repo already evaluates the intended end-to-end chain:
+This section describes the original upstream `openclaw-eval` shape. This repository is the enhanced version of that harness, so these points are historical baseline context rather than the current implementation state.
+
+The original repo already evaluated the intended end-to-end chain:
 
 ```text
 LoCoMo session text
@@ -23,14 +25,19 @@ LoCoMo session text
   -> judge scores answer
 ```
 
-The current implementation is not yet strict enough for publishable numbers:
+The original implementation was useful for smoke testing but not strict enough for publishable comparison numbers:
 
-- `eval.py:407` silently excludes category `5`, so `locomo10.json` uses `1,540` QA pairs instead of all `1,986`.
-- `eval.py:182-198` hardcodes session reset to `agent:main`, which breaks once we use a dedicated eval agent.
-- `eval.py:505-511` writes only total usage to the main QA output path, while `judge.py` expects an aggregate answers JSON.
+- Original LoCoMo ingest defaulted to a shared user key, while QA defaulted to a different per-sample-index key, so ingest and QA could target mismatched memory state and multi-sample runs were not isolated by sample id.
+- Original LoCoMo message rendering injected raw image URLs into the reconstructed chat text instead of using caption-only shared-image text.
+- Original `eval.py` silently excludes category `5`, so `locomo10.json` uses `1,540` QA pairs instead of all `1,986`.
+- Original `eval.py` hardcodes session reset to `agent:main`, which breaks once we use a dedicated eval agent.
+- Original `eval.py` writes only total usage to the main QA output path, while `judge.py` expects an aggregate answers JSON.
 - Ingest asks OpenClaw to remember, but this repo does not verify that any memory file was written.
 - The run has no manifest with dataset hash, OpenClaw version, eval commit, agent id, model, category policy, and config.
-- The current default model payload is always `model: "openclaw"`, so agent routing can accidentally hit the default `main` agent.
+- The original default model payload is always `model: "openclaw"`, so agent routing can accidentally hit the default `main` agent.
+- OpenViking support was ingest-oriented and needed a reproducible answer path before it could be compared as a memory backend.
+
+These are structural limits in the original repo. They are the reason this repository is maintained as an enhanced evaluation harness instead of only a surgical PR against upstream.
 
 ## Evaluation Definition
 

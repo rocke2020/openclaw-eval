@@ -10,6 +10,23 @@ memory write -> retrieval -> answer -> judge
 
 It does not preload gold memories. Ingest sends conversations through the backend's normal memory-write path, QA asks normal questions later, and artifacts record the route, dataset hash, category policy, memory-write evidence, answers, and judge output.
 
+## Target Output
+
+The primary goal is a trustworthy experiment table comparing memory configurations by task completion rate and total input-token cost. Table shapes and row names below are examples only; final groups must match the actual pipeline runs.
+
+```text
+Experimental Group                         Task Completion Rate   Cost: Input Tokens (Total)
+OpenClaw builtin memory-core               ...
+OpenClaw QMD memory, memory-core disabled  ...
+OpenViking memory plugin, memory-core disabled ...
+OpenViking memory plugin, memory-core enabled  ...
+OpenViking memory plugin, QMD memory enabled ...
+```
+
+Every number in the final table must trace back to reproducible run artifacts: `manifest.json`, `memory_write_verification.json`, `answers.json`, `judge_grades.json`, and token usage summaries. Do not report completion rates or costs that were not produced by the pipeline.
+
+The table must also name the dataset scope. A sampled run is valid for pipeline validation, but final claims should say exactly what was run, such as `locomo10_small.json`, `locomo10.json --sample 0 --sessions 1-4`, or all of `locomo10.json`. Do not imply that a subset result represents the full LoCoMo10 file.
+
 ## Setup
 
 ```bash
