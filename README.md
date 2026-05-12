@@ -1,133 +1,89 @@
 # openclaw-eval
 
-Evaluate OpenClaw responses using multi-round conversations from txt files or [LoCoMo](https://github.com/snap-research/locomo) JSON datasets.
+Strict LoCoMo-style memory benchmark harness for OpenClaw and OpenViking.
 
-## Run
+The benchmark measures the full loop:
+
+```text
+memory write -> retrieval -> answer -> judge
+```
+
+It does not preload gold memories. Ingest sends conversations through the backend's normal memory-write path, QA asks normal questions later, and artifacts record the route, dataset hash, category policy, memory-write evidence, answers, and judge output.
+
+## Setup
 
 ```bash
 uv sync
-uv run eval.py ingest ./locomo10_small.json --output output/trial.txt --tail "[remember what's said, keep existing memory]"
-uv run eval.py qa ./locomo10_small.json --output output/answers.txt --count 10
-export OPENAI_API_KEY=sk-proj-Bc..
-uv run judge.py output/answers.txt.json
-uv run judge.py output/answers.txt.json \
-      --base-url https://ark.cn-beijing.volces.com/api/v3 \
-      --token 024341c1-... \
-      --model doubao-seed-2-0-pro-260215
+mkdir -p ~/.openclaw-eval
+openclaw --profile eval config set gateway.port 19002 --strict-json
+openclaw --profile eval gateway
 ```
 
-## Dataset: LoCoMo10
+The harness defaults to `http://127.0.0.1:19002`, `--openclaw-profile eval`, and `--agent eval-locomo`.
 
-`locomo10.json` contains 10 conversation samples with:
-
-| Metric | Total |
-|--------|-------|
-| Conversations (samples) | 10 |
-| Sessions | 272 |
-| Messages | 5,882 |
-| Images | 910 |
-| QA pairs | 1,986 |
-
-### Structure
-
-```
-locomo10.json  ->  list of samples
-  sample
-    ├── sample_id          # e.g. "conv-26"
-    ├── conversation
-    │   ├── speaker_a / speaker_b
-    │   ├── session_N_date_time
-    │   └── session_N      # list of messages
-    │       └── { speaker, dia_id, text, img_url?, blip_caption?, query? }
-    ├── qa                 # list of { question, answer, evidence, category }
-    ├── event_summary
-    ├── observation
-    └── session_summary
-```
-
-## Two Modes
-
-### `ingest` - Load conversations into openclaw
-
-Sends conversation sessions to openclaw to build up memory/context. All sessions within a sample share one user key so context accumulates. By default, each LoCoMo sample uses an isolated key like `eval-conv-26`; pass `--user` to override it.
+## Strict Run
 
 ```bash
-# Ingest specific sample, sessions 1-4
-uv run python eval.py ingest ./locomo10.json --sample 0 --sessions 1-4
+uv run python eval.py ingest ./locomo10.json \
+  --base-url http://127.0.0.1:19002 \
+  --agent eval-locomo \
+  --openclaw-profile eval \
+  --run-dir output/runs/dev-smoke \
+  --sample 0 \
+  --sessions 1-4 \
+  --agent-workspace ~/.openclaw-eval/workspace-locomo-eval
 
-# Ingest with output log
-uv run python eval.py ingest ./locomo10.json --sample 0 --sessions 1-4 --output ingest.txt
+uv run python eval.py qa ./locomo10.json \
+  --base-url http://127.0.0.1:19002 \
+  --agent eval-locomo \
+  --openclaw-profile eval \
+  --run-dir output/runs/dev-smoke \
+  --sample 0 \
+  --include-categories 1,2,3,4,5
 
-# Original txt mode
-uv run python eval.py ingest example.txt --output output.txt
+uv run python judge.py output/runs/dev-smoke/answers.json \
+  --output output/runs/dev-smoke/judge_grades.json \
+  --model gpt-4o-mini
 ```
 
-Ingest prints the user key for each sample:
+Category `5` is included by default. Exclusions must be explicit with `--exclude-categories`, and the manifest records both `include_categories` and `exclude_categories`.
 
-```
-=== Sample conv-26 ===
-    user: eval-conv-26
-    4 session(s) to ingest
-```
+## Output Files
 
-Each session is bundled into a single user message:
+Each strict run writes:
 
-```
-[group chat conversation]
-
-Caroline: Hey Mel! Good to see you!
-
-Melanie: Hey Caroline! What's up?
-
-Caroline: The transgender stories were so inspiring!
-[shared image: a photo of a dog walking past a wall]
-
-[]
+```text
+manifest.json
+ingest.jsonl
+ingest_summary.json
+memory_write_verification.json
+qa.jsonl
+qa_summary.json
+answers.json
+judge_grades.json
+report.html
 ```
 
-### `qa` - Run QA evaluation
+`answers.json` is the stable judge input. `memory_write_verification.json` records whether `MEMORY.md` or `memory/*.md` changed under `--agent-workspace`.
 
-Sends QA questions to openclaw and records responses alongside expected answers. **No ingestion** - uses the same per-sample default user key as ingest, or pass `--user` if ingest used an explicit override.
+## Backend Comparison
 
 ```bash
-# Run all QAs for sample 0
-uv run python eval.py qa ./locomo10.json --sample 0 --output qa_results.txt
-
-# Run first 10 QAs only
-uv run python eval.py qa ./locomo10.json --sample 0 --count 10 --output qa_results.txt
+uv run python eval.py compare ./locomo10.json \
+  --run-group output/runs/locomo-memory-comparison-001 \
+  --backends oo-builtin,oo-qmd,openviking \
+  --include-categories 1,2,3,4,5 \
+  --allow-non-publishable
 ```
 
-Output format:
+`oo-builtin` is always the baseline row. `oo-qmd` is an OpenClaw memory backend variant. `openviking` uses the OpenViking adapter and records answer mode `openviking-search-rag`.
 
-```
-=== [conv-26] Q1 Category 5 ===
-[question] What did Caroline realize after her charity race?
-[expected] self-care is important
-[response] <openclaw's response>
-[evidence] D2:3
-```
+For the primary comparison, QMD extra paths and transcript indexing should stay off unless the run is explicitly marked as an ablation.
 
-## Typical Workflow
+## Publishability
 
-```bash
-# Step 1: ingest conversations
-uv run python eval.py ingest ./locomo10.json --sample 0 --sessions 1-4
+A run is not publishable if `memory_write_verification.status` is `not_configured`, the eval agent is `main`, backend config cannot be verified, QMD extra paths or transcript indexing are enabled for a primary comparison, category exclusions are not declared, the manifest lacks dataset hash or eval commit, or QA artifacts are incomplete.
 
-# Step 2: run QA using the same default sample user key
-uv run python eval.py qa ./locomo10.json --sample 0 --output qa_results.txt
-```
+## LoCoMo10
 
-## CLI Options
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `mode` (positional) | required | `ingest` or `qa` |
-| `input` (positional) | required | Path to `.txt` or `.json` input file |
-| `--output` | none | Path to output file. Omit to skip writing |
-| `--base-url` | `http://127.0.0.1:18789` | OpenClaw gateway URL |
-| `--token` | `xxx` | Auth token (or `OPENCLAW_GATEWAY_TOKEN` env var) |
-| `--sample` | all | LoCoMo: sample index (0-based) |
-| `--sessions` | all | Ingest: session range, e.g. `1-4` or `3` |
-| `--tail` | `[]` | Ingest: tail message appended per session |
-| `--user` | per-sample key | Override OpenClaw user key for ingest or QA |
-| `--count` | all | QA: number of questions to run |
+`locomo10.json` contains 10 conversation samples, 272 sessions, 5,882 messages, 910 images, and 1,986 QA pairs.

@@ -1,6 +1,8 @@
 import asyncio
 import json
 import os
+import re
+from typing import Any
 
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
@@ -8,7 +10,7 @@ from openai import AsyncOpenAI
 
 async def locomo_grader(
     llm_client, model: str, question: str, gold_answer: str, response: str
-) -> bool:
+) -> dict:
     system_prompt = """
         You are an expert grader that determines if answers to questions match a gold standard answer
         """
@@ -39,20 +41,60 @@ async def locomo_grader(
     Respond with JSON only: {{"is_correct": "CORRECT" or "WRONG", "reasoning": "your explanation"}}
     """
 
-    resp = await llm_client.chat.completions.create(
-        model=model,
-        messages=[
+    create_kwargs = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": ACCURACY_PROMPT},
         ],
-        # response_format={"type": "json_object"},
-        temperature=0,
-    )
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+    }
+    try:
+        resp = await _create_with_retries(llm_client, create_kwargs)
+    except Exception:
+        create_kwargs.pop("response_format", None)
+        resp = await _create_with_retries(llm_client, create_kwargs)
+
     content = resp.choices[0].message.content
-    result = json.loads(content)
+    result = parse_json_object(content)
 
     label = result.get("is_correct", result.get("label", "WRONG"))
-    return label.strip().lower() == "correct"
+    normalized = str(label).strip().upper()
+    return {
+        "grade": normalized == "CORRECT",
+        "label": normalized,
+        "reasoning": result.get("reasoning", ""),
+        "judge_model": model,
+    }
+
+
+async def _create_with_retries(llm_client, kwargs: dict) -> Any:
+    last_exc = None
+    for attempt in range(3):
+        try:
+            return await llm_client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            last_exc = exc
+            if not _is_transient_error(exc) or attempt == 2:
+                raise
+            await asyncio.sleep(0.25 * (attempt + 1))
+    raise last_exc
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    status = getattr(exc, "status_code", None)
+    return status in {429, 500, 502, 503, 504}
+
+
+def parse_json_object(content: str) -> dict:
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", content, flags=re.DOTALL)
+        if not match:
+            raise
+        return json.loads(match.group(0))
 
 
 def load_answers(path: str) -> list[dict]:
@@ -75,6 +117,7 @@ async def grade_answers(
     base_url: str | None = None,
     api_key: str | None = None,
     model: str = "gpt-4o-mini",
+    parallel: int = 8,
 ) -> list[dict]:
     """Grade a list of answer dicts using the LLM grader.
 
@@ -87,21 +130,26 @@ async def grade_answers(
         api_key=api_key or os.getenv("OPENAI_API_KEY"),
     )
 
-    tasks = []
-    for item in answers:
-        task = locomo_grader(
-            client,
-            model,
-            item["question"],
-            item["expected"],
-            item["response"],
-        )
-        tasks.append(task)
+    semaphore = asyncio.Semaphore(parallel)
 
-    results = await asyncio.gather(*tasks)
+    async def grade_one(item: dict) -> dict:
+        async with semaphore:
+            try:
+                payload = await locomo_grader(
+                    client,
+                    model,
+                    item["question"],
+                    item["expected"],
+                    item["response"],
+                )
+                return {**item, **payload}
+            except Exception as exc:
+                return {
+                    **item,
+                    "grade": False,
+                    "label": "ERROR",
+                    "reasoning": str(exc),
+                    "judge_model": model,
+                }
 
-    graded = []
-    for item, is_correct in zip(answers, results):
-        graded.append({**item, "grade": is_correct})
-
-    return graded
+    return await asyncio.gather(*(grade_one(item) for item in answers))

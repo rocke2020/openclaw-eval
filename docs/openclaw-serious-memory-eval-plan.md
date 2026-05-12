@@ -4,7 +4,7 @@
 
 **Goal:** Turn this repo into a publishable, stricter, reproducible memory benchmark harness for LoCoMo-style "memory write + retrieval + answer" evaluation, with OpenClaw built-in memory as the baseline and comparable QMD/OpenViking runs.
 
-**Architecture:** Keep the existing LoCoMo ingest and QA shape, but make every hidden assumption explicit: target backend, target agent, user key, dataset fingerprint, category filter, memory write verification, run manifest, and scoring output. The harness should support a dedicated eval agent in a normal gateway for daily runs, a dedicated OpenClaw profile/gateway for publishable OpenClaw runs, and an OpenViking adapter that can be scored under the same artifact contract.
+**Architecture:** Keep the existing LoCoMo ingest and QA shape, but make every hidden assumption explicit: target backend, target agent, user key, dataset fingerprint, category filter, memory write verification, run manifest, and scoring output. The harness should support a dedicated OpenClaw profile/gateway for publishable OpenClaw runs and an OpenViking adapter that can be scored under the same artifact contract.
 
 **Tech Stack:** Python 3.13, `unittest`, OpenClaw `/v1/responses`, OpenViking CLI, LoCoMo JSON, JSONL/JSON artifacts, optional HTML report.
 
@@ -80,39 +80,25 @@ Fairness rules:
 
 ## Isolation Model
 
-### Tier 1: serious local eval
-
-Use one dedicated agent in the existing gateway.
-
-```text
-gateway default profile
-  agent main
-    normal daily workspace and memory
-  agent eval-locomo
-    isolated workspace
-    isolated MEMORY.md and memory/
-    isolated sessions
-    eval-only model/tool config
-```
-
-This is enough for daily development if the agent has no `memorySearch.extraPaths` pointing at normal memory and background memory jobs are disabled or scoped away from eval.
-
-### Tier 2: publishable eval
+### Publishable Eval
 
 Use a dedicated OpenClaw profile and gateway process.
 
 ```bash
-OPENCLAW_PROFILE=locomo-eval openclaw gateway --port 18790
+mkdir -p ~/.openclaw-eval
+openclaw --profile eval config set gateway.port 19002 --strict-json
+openclaw --profile eval gateway
 ```
 
 Then run this harness against:
 
 ```bash
---base-url http://127.0.0.1:18790
+--base-url http://127.0.0.1:19002
 --agent eval-locomo
+--openclaw-profile eval
 ```
 
-This is the recommended mode for numbers that will be compared publicly.
+This is the required mode for numbers that will be compared publicly.
 
 ## Artifact Contract
 
@@ -194,7 +180,7 @@ Keep the two primary commands, but make strict mode explicit.
 uv run python eval.py ingest ./locomo10.json \
   --agent eval-locomo \
   --run-dir output/runs/locomo-eval-001 \
-  --agent-workspace ~/.openclaw/workspace-locomo-eval \
+  --agent-workspace ~/.openclaw-eval/workspace-locomo-eval \
   --tail "[remember what's said, keep existing memory]"
 
 uv run python eval.py qa ./locomo10.json \
@@ -210,13 +196,16 @@ uv run python judge.py output/runs/locomo-eval-001/answers.json \
 For publishable runs:
 
 ```bash
-OPENCLAW_PROFILE=locomo-eval openclaw gateway --port 18790
+mkdir -p ~/.openclaw-eval
+openclaw --profile eval config set gateway.port 19002 --strict-json
+openclaw --profile eval gateway
 
 uv run python eval.py ingest ./locomo10.json \
-  --base-url http://127.0.0.1:18790 \
+  --base-url http://127.0.0.1:19002 \
   --agent eval-locomo \
+  --openclaw-profile eval \
   --run-dir output/runs/locomo-eval-001 \
-  --agent-workspace ~/.openclaw/workspace-locomo-eval
+  --agent-workspace ~/.openclaw-eval/workspace-locomo-eval
 ```
 
 For the three-backend comparison:
@@ -1238,23 +1227,28 @@ git commit -m "feat: compare openclaw and openviking memory backends"
 - Modify: `README.md`
 - Create: `docs/reproducible-locomo-eval.md`
 
-- [ ] **Step 1: Document strict local run**
+- [x] **Step 1: Document strict publishable run**
 
 Add a section showing:
 
 ```bash
 uv sync
-uv run python eval.py ingest ./locomo10.json --agent eval-locomo --run-dir output/runs/dev-smoke --sample 0 --sessions 1-4 --agent-workspace ~/.openclaw/workspace-locomo-eval
-uv run python eval.py qa ./locomo10.json --agent eval-locomo --run-dir output/runs/dev-smoke --sample 0 --include-categories 1,2,3,4,5
+mkdir -p ~/.openclaw-eval
+openclaw --profile eval config set gateway.port 19002 --strict-json
+openclaw --profile eval gateway
+uv run python eval.py ingest ./locomo10.json --base-url http://127.0.0.1:19002 --agent eval-locomo --openclaw-profile eval --run-dir output/runs/dev-smoke --sample 0 --sessions 1-4 --agent-workspace ~/.openclaw-eval/workspace-locomo-eval
+uv run python eval.py qa ./locomo10.json --base-url http://127.0.0.1:19002 --agent eval-locomo --openclaw-profile eval --run-dir output/runs/dev-smoke --sample 0 --include-categories 1,2,3,4,5
 uv run python judge.py output/runs/dev-smoke/answers.json --output output/runs/dev-smoke/judge_grades.json
 ```
 
-- [ ] **Step 2: Document publishable profile run**
+- [x] **Step 2: Document publishable profile run**
 
 Add:
 
 ```bash
-OPENCLAW_PROFILE=locomo-eval openclaw gateway --port 18790
+mkdir -p ~/.openclaw-eval
+openclaw --profile eval config set gateway.port 19002 --strict-json
+openclaw --profile eval gateway
 ```
 
 and the matching `--base-url`.
@@ -1293,7 +1287,7 @@ A run is not publishable if:
 Run:
 
 ```bash
-rg -n "eval-locomo|memory_write_verification|include-categories|OPENCLAW_PROFILE|oo-builtin|oo-qmd|openviking" README.md docs/reproducible-locomo-eval.md
+rg -n "eval-locomo|memory_write_verification|include-categories|openclaw --profile eval|oo-builtin|oo-qmd|openviking" README.md docs/reproducible-locomo-eval.md
 ```
 
 Expected: all key terms are present.
@@ -1340,7 +1334,7 @@ Run against `locomo10_small.json`:
 uv run python eval.py ingest ./locomo10_small.json \
   --agent eval-locomo \
   --run-dir output/runs/manual-small \
-  --agent-workspace ~/.openclaw/workspace-locomo-eval
+  --agent-workspace ~/.openclaw-eval/workspace-locomo-eval
 
 uv run python eval.py qa ./locomo10_small.json \
   --agent eval-locomo \
@@ -1381,7 +1375,7 @@ The repo is ready for strict memory eval when all of these are true:
 - Ingest records memory write verification.
 - Judge output includes per-category scores and saved reasoning.
 - Group reports include per-backend scores, per-category scores, publishability status, and non-publishable reasons.
-- The docs explain local eval and publishable profile/gateway eval.
+- The docs explain the publishable profile/gateway eval path.
 - Unit tests cover dataset selection, agent routing, artifact writing, memory verification, and judge parsing.
 
 ## Not In Scope

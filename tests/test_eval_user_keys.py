@@ -74,10 +74,19 @@ class EvalUserKeyTests(unittest.TestCase):
             base_url="http://127.0.0.1:18789",
             token="token",
             output=None,
+            run_dir=None,
+            agent="eval-locomo",
+            openclaw_home=None,
+            agent_workspace=None,
+            backend=None,
+            include_categories=None,
+            exclude_categories=None,
+            openviking_account=None,
+            openviking_agent_id="eval-locomo-openviking",
         )
         sent_users = []
 
-        def fake_send_message(_base_url, _token, user, _message):
+        def fake_send_message(_base_url, _token, user, _message, agent="main"):
             sent_users.append(user)
             return "ok", {}
 
@@ -102,10 +111,15 @@ class EvalUserKeyTests(unittest.TestCase):
             output=None,
             base_url="http://127.0.0.1:18789",
             token="token",
+            agent="eval-locomo",
+            openclaw_home=None,
+            backend=None,
+            include_categories=None,
+            exclude_categories=None,
         )
         sent_users = []
 
-        def fake_send_message_with_retry(_base_url, _token, user, _message):
+        def fake_send_message_with_retry(_base_url, _token, user, _message, agent="main"):
             sent_users.append(user)
             return "hello", {}
 

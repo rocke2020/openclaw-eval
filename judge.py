@@ -14,7 +14,9 @@ import argparse
 import asyncio
 import json
 import sys
+from pathlib import Path
 
+from eval_artifacts import render_report_html, summarize_judged
 from judge_util import grade_answers, load_answers
 
 
@@ -24,43 +26,47 @@ async def run(
     base_url: str | None,
     token: str | None,
     model: str,
+    parallel: int,
 ) -> None:
     answers = load_answers(input_path)
     print(f"Loaded {len(answers)} answers from {input_path}", file=sys.stderr)
 
-    graded = await grade_answers(answers, base_url=base_url, api_key=token, model=model)
+    graded = await grade_answers(
+        answers,
+        base_url=base_url,
+        api_key=token,
+        model=model,
+        parallel=parallel,
+    )
+    summary = summarize_judged(graded)
 
-    correct = sum(1 for g in graded if g["grade"])
-    total = len(graded)
-    score = correct / total if total > 0 else 0.0
+    print(f"\nResults: {summary['correct']}/{summary['total']} correct ({summary['score']:.2%})")
 
-    print(f"\nResults: {correct}/{total} correct ({score:.2%})")
-
-    # Per-category breakdown if categories exist
-    categories = {}
-    for g in graded:
-        cat = g.get("category", "unknown")
-        categories.setdefault(cat, {"correct": 0, "total": 0})
-        categories[cat]["total"] += 1
-        if g["grade"]:
-            categories[cat]["correct"] += 1
-
-    if len(categories) > 1:
+    if len(summary["per_category"]) > 1:
         print("\nPer-category scores:")
-        for cat in sorted(categories):
-            c = categories[cat]
-            pct = c["correct"] / c["total"] if c["total"] > 0 else 0.0
-            print(f"  Category {cat}: {c['correct']}/{c['total']} ({pct:.2%})")
+        for cat in sorted(summary["per_category"]):
+            c = summary["per_category"][cat]
+            print(f"  Category {cat}: {c['correct']}/{c['total']} ({c['score']:.2%})")
 
     if output_path:
         with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(
-                {"score": score, "correct": correct, "total": total, "grades": graded},
-                f,
-                indent=2,
-                ensure_ascii=False,
-            )
+            json.dump(summary, f, indent=2, ensure_ascii=False)
         print(f"\nGrades written to {output_path}", file=sys.stderr)
+        _maybe_write_report(output_path, summary)
+
+
+def _maybe_write_report(output_path: str, judge_summary: dict) -> None:
+    run_dir = Path(output_path).parent
+    manifest_path = run_dir / "manifest.json"
+    qa_summary_path = run_dir / "qa_summary.json"
+    if not manifest_path.exists() or not qa_summary_path.exists():
+        return
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    qa_summary = json.loads(qa_summary_path.read_text(encoding="utf-8"))
+    (run_dir / "report.html").write_text(
+        render_report_html(manifest, qa_summary, judge_summary),
+        encoding="utf-8",
+    )
 
 
 def main():
@@ -82,9 +88,10 @@ def main():
         default="gpt-4o-mini",
         help="Model name for grading (default: gpt-4o-mini)",
     )
+    parser.add_argument("--parallel", type=int, default=8, help="Judge requests in flight")
     args = parser.parse_args()
 
-    asyncio.run(run(args.input, args.output, args.base_url, args.token, args.model))
+    asyncio.run(run(args.input, args.output, args.base_url, args.token, args.model, args.parallel))
 
 
 if __name__ == "__main__":
