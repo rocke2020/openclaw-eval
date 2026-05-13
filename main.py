@@ -341,11 +341,25 @@ def run_ingest(args: argparse.Namespace) -> list[dict]:
         if run_dir:
             write_jsonl(run_dir / "ingest.jsonl", results)
             write_json(run_dir / "ingest_summary.json", summary)
-            memory_payload = (
-                {"status": "ok", "samples": verification}
-                if args.agent_workspace
-                else {"status": "not_configured", "samples": []}
-            )
+            if args.agent_workspace:
+                per_sample = bool(getattr(args, "per_sample_agent", False))
+                detections = [bool(v.get("write_detected")) for v in verification]
+                invariant_held = (
+                    all(detections) if per_sample else any(detections)
+                ) if detections else False
+                memory_payload = {
+                    "status": "ok",
+                    "invariant_held": invariant_held,
+                    "invariant_rule": "all" if per_sample else "any",
+                    "samples": verification,
+                }
+            else:
+                memory_payload = {
+                    "status": "not_configured",
+                    "invariant_held": False,
+                    "invariant_rule": "any",
+                    "samples": [],
+                }
             write_json(run_dir / "memory_write_verification.json", memory_payload)
 
         if args.output:
@@ -623,17 +637,37 @@ def _collect_one_backend(args: argparse.Namespace, backend_id: str, group_dir: P
 
     verification_path = Path(run_args.run_dir) / "memory_write_verification.json"
     memory_verified = False
+    memory_verified_detail = ""
     if verification_path.exists():
         verification = json.loads(verification_path.read_text(encoding="utf-8"))
-        memory_verified = any(
-            item.get("write_detected") for item in verification.get("samples", [])
-        )
+        samples = verification.get("samples", [])
+        detected = [bool(s.get("write_detected")) for s in samples]
+        per_sample = bool(getattr(run_args, "per_sample_agent", False))
+        if not samples:
+            memory_verified_detail = "no samples verified (workspace not configured)"
+        elif per_sample:
+            memory_verified = all(detected)
+            if not memory_verified:
+                missing = [
+                    s.get("sample_id", "?") for s, d in zip(samples, detected) if not d
+                ]
+                memory_verified_detail = (
+                    f"per-sample mode requires writes for all samples; "
+                    f"{len(missing)}/{len(samples)} missing: {','.join(missing)}"
+                )
+        else:
+            memory_verified = any(detected)
+            if not memory_verified:
+                memory_verified_detail = "no sample showed a memory write"
 
     reasons: list[str] = []
     if run_args.agent == "main":
         reasons.append("eval agent is main")
     if not memory_verified:
-        reasons.append("memory write verification failed or is not configured")
+        reasons.append(
+            "memory write verification failed or is not configured"
+            + (f" ({memory_verified_detail})" if memory_verified_detail else "")
+        )
 
     ingest_summary_path = Path(run_args.run_dir) / "ingest_summary.json"
     if ingest_summary_path.exists():
