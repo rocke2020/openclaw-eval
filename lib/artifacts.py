@@ -158,14 +158,68 @@ def per_category_summary(graded: list[dict]) -> dict:
     return categories
 
 
+CATEGORY_LABELS = {
+    "1": "Single-hop factual",
+    "2": "Temporal",
+    "3": "Multi-hop reasoning",
+    "4": "Yes/No verification",
+    "5": "Open-ended / adversarial",
+}
+
+CATEGORY_LEGEND = """<details open><summary><strong>Category definitions</strong></summary>
+<table>
+<thead><tr><th>Category</th><th>What it tests</th><th>Example Q</th><th>Expected keywords</th><th>How to answer</th></tr></thead>
+<tbody>
+<tr><td>1 — Single-hop factual</td><td>Direct recall of one stated fact</td>
+<td>What instrument does Melanie play?</td><td>Violin</td>
+<td>Retrieve the single conversation where the fact was mentioned</td></tr>
+<tr><td>2 — Temporal</td><td>Date/time recall or ordering</td>
+<td>When did Caroline go to the support group?</td><td>7 May 2023</td>
+<td>Locate the event and return its timestamp</td></tr>
+<tr><td>3 — Multi-hop reasoning</td><td>Combine facts from multiple conversations</td>
+<td>Who introduced the hobby that Dave later taught?</td><td>Calvin</td>
+<td>Chain: find who introduced it → confirm Dave taught it → return the introducer</td></tr>
+<tr><td>4 — Yes/No verification</td><td>Confirm or deny a claim against memory</td>
+<td>Did Sam ever mention visiting Italy?</td><td>No</td>
+<td>Search all conversations for the claim; absence = No</td></tr>
+<tr><td>5 — Open-ended / adversarial</td><td>Questions with false premises, misattributions, or requiring unstated inference</td>
+<td>What did Caroline realize after her charity race?</td><td>Self-care is important (trap: it was Melanie's race, not Caroline's)</td>
+<td>Detect the misattribution, refuse the false premise, then recall the correct person's realization</td></tr>
+</tbody></table></details>"""
+
+
+def _render_category_table(per_category: dict) -> str:
+    if not per_category:
+        return ""
+    rows = []
+    for cat in sorted(per_category):
+        c = per_category[cat]
+        label = CATEGORY_LABELS.get(cat, f"Category {cat}")
+        rows.append(
+            f"<tr><td>{html.escape(cat)}</td>"
+            f"<td>{html.escape(label)}</td>"
+            f"<td>{c['correct']}/{c['total']}</td>"
+            f"<td>{c['score']:.2%}</td></tr>"
+        )
+    return (
+        "<h2>Per-category scores</h2>"
+        "<table><thead><tr><th>Category</th><th>Type</th><th>Correct</th>"
+        "<th>Score</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
+        f"{CATEGORY_LEGEND}"
+    )
+
+
 def render_report_html(
     manifest: dict,
     qa_summary: dict,
     judge_summary: dict | None = None,
 ) -> str:
     score = None
+    category_html = ""
     if judge_summary:
         score = f"{judge_summary.get('score', 0.0):.2%}"
+        category_html = _render_category_table(judge_summary.get("per_category", {}))
     rows = [
         ("Run", manifest.get("run_id")),
         ("Backend", manifest.get("backend_id")),
@@ -187,6 +241,7 @@ def render_report_html(
         "th{width:14rem;background:#f6f6f6}</style></head><body>"
         f"<h1>LoCoMo Eval Report: {html.escape(str(manifest.get('run_id')))}</h1>"
         f"<table>{body}</table>"
+        f"{category_html}"
         "</body></html>"
     )
 
@@ -209,11 +264,26 @@ def render_comparison_report_html(group_manifest: dict, backend_summaries: list[
             f"<td>{html.escape('; '.join(summary.get('non_publishable_reasons', [])))}</td>"
             "</tr>"
         )
+
+    category_sections = []
+    for summary in ordered:
+        per_category = summary.get("per_category", {})
+        if per_category:
+            backend_id = summary.get("backend_id", "")
+            section = f"<h3>{html.escape(backend_id)}</h3>{_render_category_table(per_category)}"
+            category_sections.append(section)
+
     return (
         "<!doctype html><html><head><meta charset=\"utf-8\">"
-        "<title>Memory Backend Comparison</title></head><body>"
+        "<title>Memory Backend Comparison</title>"
+        "<style>body{font-family:system-ui,sans-serif;margin:2rem;max-width:960px}"
+        "table{border-collapse:collapse;width:100%;margin-bottom:1.5rem}"
+        "th,td{border:1px solid #ddd;padding:.5rem;text-align:left}"
+        "th{background:#f6f6f6}</style></head><body>"
         f"<h1>{html.escape(str(group_manifest.get('run_group_id', 'comparison')))}</h1>"
         "<table><thead><tr><th>Backend</th><th>Kind</th><th>Publishable</th>"
         "<th>QA total</th><th>Score</th><th>Memory writes</th><th>Notes</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table></body></html>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
+        f"{''.join(category_sections)}"
+        "</body></html>"
     )

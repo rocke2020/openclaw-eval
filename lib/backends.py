@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from lib.openclaw import send_message
+from lib.openclaw import send_message_with_retry
 from lib.openviking import add_memory, search
 
 
@@ -31,10 +31,10 @@ class OpenClawBackend:
     backend_kind: str = "openclaw"
 
     def ingest(self, user: str, message: str) -> tuple[str, dict]:
-        return send_message(self.base_url, self.token, user, message, agent=self.agent)
+        return send_message_with_retry(self.base_url, self.token, user, message, agent=self.agent)
 
     def answer(self, user: str, question: str) -> tuple[str, dict]:
-        return send_message(self.base_url, self.token, user, question, agent=self.agent)
+        return send_message_with_retry(self.base_url, self.token, user, question, agent=self.agent)
 
     def manifest_config(self) -> dict:
         return {

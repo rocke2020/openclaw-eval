@@ -94,7 +94,7 @@ class EvalUserKeyTests(unittest.TestCase):
                 "load_locomo_data",
                 return_value=[locomo_sample("conv-26"), locomo_sample("conv-30")],
             ),
-            mock.patch.object(eval_module, "send_message", side_effect=fake_send_message),
+            mock.patch.object(eval_module, "send_message_with_retry", side_effect=fake_send_message),
             mock.patch.object(eval_module, "get_session_id", return_value=None),
             mock.patch.object(eval_module, "reset_session"),
         ):
@@ -117,7 +117,7 @@ class EvalUserKeyTests(unittest.TestCase):
         )
         sent_users = []
 
-        def fake_send_message_with_retry(_base_url, _token, user, _message, agent="main"):
+        def fake_send_message_with_retry(_base_url, _token, user, _message, **_kwargs):
             sent_users.append(user)
             return "hello", {}
 

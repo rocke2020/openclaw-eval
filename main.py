@@ -1,37 +1,34 @@
 """
 OpenClaw Memory Evaluation Harness.
 
-Unified CLI for running strict LoCoMo-style memory benchmarks:
-  ingest, QA, multi-backend comparison, and LLM judge grading.
-
 Usage examples:
 
-  # Ingest conversations into a single backend
+  # Full evaluation: ingest + QA + judge + comparison report
+  uv run python main.py eval ./locomo10.json \\
+      --run-group output/runs/full-$(date +%Y%m%d-%H%M%S) \\
+      --backends oo-builtin \\
+      --builtin-agent eval-locomo-builtin-full \\
+      --agent-workspace ~/.openclaw-eval/workspace-locomo-builtin-full \\
+      --per-sample-agent \\
+      --include-categories 1,2,3,4,5 \\
+      --judge-model deepseek-v4-flash \\
+      --judge-base-url https://api.deepseek.com/v1 \\
+      --judge-token $DEEPSEEK_API_KEY
+
+  # Ingest only (load conversations into a memory backend)
   uv run python main.py ingest ./locomo10_small.json \\
       --run-dir output/runs/dev-smoke --sample 0 --sessions 1-1
 
-  # Run QA questions against a backend that already ingested data
+  # QA only (send questions against already-ingested data)
   uv run python main.py qa ./locomo10_small.json \\
       --run-dir output/runs/dev-smoke --include-categories 1,2,3,4,5
 
-  # Multi-backend comparison (ingest + QA for each backend)
-  uv run python main.py compare ./locomo10_small.json \\
-      --run-group output/runs/builtin-vs-viking \\
-      --backends oo-builtin,openviking \\
-      --agent-workspace ~/.openclaw-eval/workspace-locomo-eval
-
-  # Judge: grade QA answers with an LLM and produce the final report
-  uv run python main.py judge output/runs/dev-smoke/oo-builtin/answers.json \\
-      --output output/runs/dev-smoke/oo-builtin/judge_grades.json \\
+  # Judge only (grade answers from a previous run)
+  uv run python main.py judge output/runs/.../answers.json \\
+      --output output/runs/.../judge_grades.json \\
       --model deepseek-v4-flash \\
-      --base-url https://ark.cn-beijing.volces.com/api/v3 \\
-      --token $ARK_API_KEY
-
-  # Full pipeline (compare then judge each backend)
-  uv run python main.py compare ./locomo10_small.json \\
-      --run-group output/runs/full-run --backends oo-builtin
-  uv run python main.py judge output/runs/full-run/oo-builtin/answers.json \\
-      --output output/runs/full-run/oo-builtin/judge_grades.json
+      --base-url https://api.deepseek.com/v1 \\
+      --token $DEEPSEEK_API_KEY
 """
 
 from __future__ import annotations
@@ -56,6 +53,7 @@ from lib.artifacts import (
     write_jsonl,
     write_manifest,
 )
+from lib.agent_provision import ensure_sample_agent, provision_sample_agents
 from lib.backends import backend_run_dir, build_backend
 from lib.judge_util import grade_answers, load_answers
 from lib.locomo import (
@@ -72,7 +70,6 @@ from lib.memory_verify import diff_memory_snapshots, snapshot_memory_files
 from lib.openclaw import (
     get_session_id,
     reset_session,
-    send_message,
     send_message_with_retry,
 )
 
@@ -121,19 +118,26 @@ def _call_ingest(args, user_key: str, message: str) -> tuple[str, dict]:
         if result["returncode"] != 0:
             raise RuntimeError(result["stderr"].strip() or "ov add-memory failed")
         return "[viking] saved", result
-    return send_message(args.base_url, args.token, user_key, message, agent=args.agent)
+    return send_message_with_retry(
+        args.base_url, args.token, user_key, message, agent=args.agent,
+    )
 
 
 def _call_answer(args, user_key: str, question: str) -> tuple[str, dict]:
     backend = getattr(args, "backend", None)
     if backend is not None:
         return backend.answer(user_key, question)
+
+    def _reset_for_retry() -> None:
+        _maybe_reset_session(args, user_key)
+
     return send_message_with_retry(
         args.base_url,
         args.token,
         user_key,
         question,
         agent=args.agent,
+        reset_between_attempts=_reset_for_retry,
     )
 
 
@@ -172,6 +176,91 @@ def _write_run_manifest(args, samples: list[dict], backend_config: dict | None =
 # ---------------------------------------------------------------------------
 
 
+def _resolve_sample_agent(args, sample_id: str) -> tuple[str, str | None]:
+    """Return (agent_id, workspace) for a sample, provisioning if per-sample mode is on."""
+    agent_workspace = getattr(args, "agent_workspace", None)
+    if not getattr(args, "per_sample_agent", False) or not agent_workspace:
+        return args.agent, agent_workspace
+
+    info = ensure_sample_agent(
+        profile=getattr(args, "openclaw_profile", "eval"),
+        base_agent=args.agent,
+        base_workspace=args.agent_workspace,
+        sample_id=sample_id,
+    )
+    return info["agent_id"], info["workspace"]
+
+
+def _ingest_one_sample(
+    item: dict,
+    args: argparse.Namespace,
+    session_range: tuple[int, int] | None,
+) -> tuple[list[dict], dict | None]:
+    """Ingest all sessions for one sample. Returns (records, verification_entry)."""
+    sample_id = item["sample_id"]
+    user_key = args.user or default_sample_user(sample_id)
+    sample_agent, sample_ws = _resolve_sample_agent(args, sample_id)
+    sessions = build_session_messages(item, session_range, tail=args.tail)
+
+    print(f"\n=== Sample {sample_id} ===", file=sys.stderr)
+    print(f"    user: {user_key}", file=sys.stderr)
+    print(f"    agent: {sample_agent}", file=sys.stderr)
+    print(f"    {len(sessions)} session(s) to ingest", file=sys.stderr)
+
+    before = snapshot_memory_files(sample_ws) if sample_ws else None
+
+    sample_args = copy.copy(args)
+    sample_args.agent = sample_agent
+
+    records = []
+    for sess in sessions:
+        meta = sess["meta"]
+        msg = sess["message"]
+        label = f"{meta['session_key']} ({meta['date_time']})"
+        preview = msg.replace("\n", " | ")[:80]
+        print(f"  [{label}] {preview}...", file=sys.stderr)
+
+        record: dict = {
+            "sample_id": sample_id,
+            "session": meta["session_key"],
+            "user": user_key,
+            "agent": sample_agent,
+        }
+        try:
+            reply, usage = _call_ingest(sample_args, user_key, msg)
+            print(
+                f"    -> {reply[:80]}{'...' if len(reply) > 80 else ''}",
+                file=sys.stderr,
+            )
+            record.update({
+                "status": "ok",
+                "reply": reply,
+                "usage": usage,
+            })
+        except Exception as e:
+            from lib.openclaw import is_retryable_error
+            print(f"    -> [ERROR] {type(e).__name__}: {e}", file=sys.stderr)
+            record.update({
+                "status": "failed",
+                "reply": f"[ERROR] {e}",
+                "usage": {},
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "retryable": is_retryable_error(e),
+            })
+
+        records.append(record)
+        _maybe_reset_session(sample_args, user_key)
+
+    verification_entry = None
+    if sample_ws:
+        after = snapshot_memory_files(sample_ws)
+        diff = diff_memory_snapshots(before or {}, after)
+        verification_entry = {"sample_id": sample_id, "user": user_key, **diff}
+
+    return records, verification_entry
+
+
 def run_ingest(args: argparse.Namespace) -> list[dict]:
     """Load conversations into OpenClaw/OpenViking."""
     session_range = parse_session_range(args.sessions) if args.sessions else None
@@ -179,64 +268,74 @@ def run_ingest(args: argparse.Namespace) -> list[dict]:
 
     if args.input.endswith(".json"):
         samples = load_locomo_data(args.input, args.sample)
-        results = []
-        verification = []
+
+        if getattr(args, "per_sample_agent", False) and getattr(args, "agent_workspace", None):
+            sample_ids = [item["sample_id"] for item in samples]
+            provision_sample_agents(
+                profile=getattr(args, "openclaw_profile", "eval"),
+                base_agent=args.agent,
+                base_workspace=args.agent_workspace,
+                sample_ids=sample_ids,
+            )
 
         backend_config = args.backend.manifest_config() if getattr(args, "backend", None) else None
         _write_run_manifest(args, samples, backend_config)
 
-        for item in samples:
-            sample_id = item["sample_id"]
-            user_key = args.user or default_sample_user(sample_id)
-            sessions = build_session_messages(item, session_range, tail=args.tail)
+        parallel = getattr(args, "ingest_parallel", 4) if getattr(args, "per_sample_agent", False) else 1
 
-            print(f"\n=== Sample {sample_id} ===", file=sys.stderr)
-            print(f"    user: {user_key}", file=sys.stderr)
-            print(f"    {len(sessions)} session(s) to ingest", file=sys.stderr)
-
-            before = (
-                snapshot_memory_files(args.agent_workspace)
-                if args.agent_workspace
-                else None
-            )
-
-            for sess in sessions:
-                meta = sess["meta"]
-                msg = sess["message"]
-                label = f"{meta['session_key']} ({meta['date_time']})"
-                preview = msg.replace("\n", " | ")[:80]
-                print(f"  [{label}] {preview}...", file=sys.stderr)
-
-                try:
-                    reply, usage = _call_ingest(args, user_key, msg)
-                    print(
-                        f"    -> {reply[:80]}{'...' if len(reply) > 80 else ''}",
-                        file=sys.stderr,
-                    )
-                except Exception as e:
-                    reply = f"[ERROR] {e}"
-                    usage = {}
-                    print(f"    -> {reply}", file=sys.stderr)
-
-                record = {
+        def _ingest_one_sample_safe(item):
+            try:
+                return _ingest_one_sample(item, args, session_range)
+            except Exception as e:
+                sample_id = item.get("sample_id", "unknown")
+                print(f"\n    [ERROR] Sample {sample_id} ingest aborted: {type(e).__name__}: {e}", file=sys.stderr)
+                failure_record = {
                     "sample_id": sample_id,
-                    "session": meta["session_key"],
-                    "user": user_key,
+                    "session": "<sample-aborted>",
+                    "user": args.user or default_sample_user(sample_id),
                     "agent": args.agent,
-                    "reply": reply,
-                    "usage": usage,
+                    "status": "failed",
+                    "reply": f"[ERROR] sample aborted: {e}",
+                    "usage": {},
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                    "retryable": False,
                 }
-                results.append(record)
-                _maybe_reset_session(args, user_key)
+                return [failure_record], None
 
-            if args.agent_workspace:
-                after = snapshot_memory_files(args.agent_workspace)
-                diff = diff_memory_snapshots(before or {}, after)
-                verification.append({"sample_id": sample_id, "user": user_key, **diff})
+        if parallel > 1:
+            async def _run_parallel():
+                semaphore = asyncio.Semaphore(parallel)
 
+                async def _ingest_with_sem(item):
+                    async with semaphore:
+                        return await asyncio.to_thread(_ingest_one_sample_safe, item)
+
+                return await asyncio.gather(*[_ingest_with_sem(item) for item in samples])
+
+            results_list = asyncio.run(_run_parallel())
+        else:
+            results_list = [_ingest_one_sample_safe(item) for item in samples]
+
+        results = []
+        verification = []
+        failed_samples: set[str] = set()
+        for records, verif in results_list:
+            results.extend(records)
+            if verif:
+                verification.append(verif)
+            for r in records:
+                if r.get("status") == "failed":
+                    failed_samples.add(r["sample_id"])
+
+        sessions_failed = sum(1 for r in results if r.get("status") == "failed")
         summary = {
             "total": len(results),
             "usage": summarize_usage(results),
+            "samples_total": len(samples),
+            "sessions_total": len(results),
+            "sessions_failed": sessions_failed,
+            "samples_failed": len(failed_samples),
         }
 
         if run_dir:
@@ -307,6 +406,7 @@ async def run_sample_qa(
     """Process QA for a single sample. Returns (records, sample_usage)."""
     sample_id = item["sample_id"]
     user_key = args.user or default_sample_user(sample_id)
+    sample_agent, _ = _resolve_sample_agent(args, sample_id)
     include_categories = parse_category_set(args.include_categories)
     exclude_categories = parse_category_set(args.exclude_categories)
     qas = select_qas(item, include_categories, exclude_categories, args.count)
@@ -314,8 +414,12 @@ async def run_sample_qa(
     sample_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     records = []
 
+    # Create a shallow copy of args with the per-sample agent
+    sample_args = copy.copy(args)
+    sample_args.agent = sample_agent
+
     async with semaphore:
-        print(f"\n=== Sample {sample_id} [{sample_idx}] (user={user_key}) ===", file=sys.stderr)
+        print(f"\n=== Sample {sample_id} [{sample_idx}] (user={user_key}, agent={sample_agent}) ===", file=sys.stderr)
         print(f"    Running {len(qas)} QA question(s)...", file=sys.stderr)
 
         for qi, qa in enumerate(qas, start=1):
@@ -330,7 +434,7 @@ async def run_sample_qa(
             )
 
             try:
-                response, usage = await asyncio.to_thread(_call_answer, args, user_key, question)
+                response, usage = await asyncio.to_thread(_call_answer, sample_args, user_key, question)
                 print(
                     f"  [{sample_idx}]   A: {response[:60]}{'...' if len(response) > 60 else ''}",
                     file=sys.stderr,
@@ -342,7 +446,7 @@ async def run_sample_qa(
                 usage = {}
                 print(f"  [{sample_idx}]   A: {response}", file=sys.stderr)
 
-            _maybe_reset_session(args, user_key)
+            _maybe_reset_session(sample_args, user_key)
 
             records.append(
                 {
@@ -355,7 +459,7 @@ async def run_sample_qa(
                     "category": category,
                     "evidence": evidence,
                     "user": user_key,
-                    "agent": args.agent,
+                    "agent": sample_agent,
                     "usage": usage,
                 }
             )
@@ -373,7 +477,7 @@ def run_qa(args: argparse.Namespace) -> list[dict]:
     backend_config = args.backend.manifest_config() if getattr(args, "backend", None) else None
     _write_run_manifest(args, samples, backend_config)
 
-    parallel = min(args.parallel, 10)
+    parallel = min(getattr(args, "qa_parallel", 5), 10)
     print(f"    user: {args.user or 'per-sample default'}", file=sys.stderr)
     print(f"    agent: {args.agent}", file=sys.stderr)
     print(f"    parallel: {parallel}", file=sys.stderr)
@@ -466,48 +570,13 @@ def run_canaries(samples: list[dict], args: argparse.Namespace) -> list[dict]:
     return records
 
 
-def run_collect(args: argparse.Namespace) -> None:
-    """Run ingest + QA for each backend. Judge scores are filled by 'judge' afterward."""
+def run_pipeline(args: argparse.Namespace) -> None:
+    """Full pipeline: ingest → QA → judge → comparison report."""
     backends = [item.strip() for item in args.backends.split(",") if item.strip()]
     group_dir = ensure_run_dir(args.run_group)
 
     for backend_id in backends:
-        backend = build_backend(backend_id, args)
-        run_args = copy.copy(args)
-        run_args.backend = backend
-        run_args.backend_id = backend.backend_id
-        run_args.backend_kind = backend.backend_kind
-        run_args.agent = getattr(backend, "agent", args.agent)
-        run_args.run_dir = str(backend_run_dir(args.run_group, backend_id))
-        run_args.run_group_id = group_dir.name
-        ensure_run_dir(run_args.run_dir)
-
-        if backend.backend_kind == "openviking":
-            run_args.viking = True
-
-        print(f"\n=== Backend {backend_id}: ingest ===", file=sys.stderr)
-        run_ingest(run_args)
-        print(f"\n=== Backend {backend_id}: qa ===", file=sys.stderr)
-        run_qa(run_args)
-
-        verification_path = Path(run_args.run_dir) / "memory_write_verification.json"
-        memory_verified = False
-        if verification_path.exists():
-            verification = json.loads(verification_path.read_text(encoding="utf-8"))
-            memory_verified = any(
-                item.get("write_detected") for item in verification.get("samples", [])
-            )
-        if run_args.agent == "main":
-            reasons = ["eval agent is main"]
-        elif not memory_verified:
-            reasons = ["memory write verification failed or is not configured"]
-        else:
-            reasons = []
-
-        if reasons and not args.allow_non_publishable:
-            raise SystemExit(
-                f"Backend {backend_id} is non-publishable: {'; '.join(reasons)}"
-            )
+        _collect_one_backend(args, backend_id, group_dir)
 
     group_manifest = {
         "run_group_id": group_dir.name,
@@ -515,6 +584,71 @@ def run_collect(args: argparse.Namespace) -> None:
         "baseline_backend": "oo-builtin",
     }
     write_json(group_dir / "group_manifest.json", group_manifest)
+
+    # Judge each backend
+    for backend_id in backends:
+        answers_path = str(backend_run_dir(args.run_group, backend_id) / "answers.json")
+        output_path = str(backend_run_dir(args.run_group, backend_id) / "judge_grades.json")
+
+        print(f"\n=== Backend {backend_id}: judge ===", file=sys.stderr)
+        asyncio.run(run_judge_async(
+            input_path=answers_path,
+            output_path=output_path,
+            base_url=getattr(args, "judge_base_url", None),
+            token=getattr(args, "judge_token", None) or os.environ.get("OPENAI_API_KEY"),
+            model=getattr(args, "judge_model", None) or "gpt-4o-mini",
+            parallel=getattr(args, "judge_parallel", 8),
+        ))
+
+
+def _collect_one_backend(args: argparse.Namespace, backend_id: str, group_dir: Path) -> None:
+    """Run ingest + QA for a single backend."""
+    backend = build_backend(backend_id, args)
+    run_args = copy.copy(args)
+    run_args.backend = backend
+    run_args.backend_id = backend.backend_id
+    run_args.backend_kind = backend.backend_kind
+    run_args.agent = getattr(backend, "agent", args.agent)
+    run_args.run_dir = str(backend_run_dir(args.run_group, backend_id))
+    run_args.run_group_id = group_dir.name
+    ensure_run_dir(run_args.run_dir)
+
+    if backend.backend_kind == "openviking":
+        run_args.viking = True
+
+    print(f"\n=== Backend {backend_id}: ingest ===", file=sys.stderr)
+    run_ingest(run_args)
+    print(f"\n=== Backend {backend_id}: qa ===", file=sys.stderr)
+    run_qa(run_args)
+
+    verification_path = Path(run_args.run_dir) / "memory_write_verification.json"
+    memory_verified = False
+    if verification_path.exists():
+        verification = json.loads(verification_path.read_text(encoding="utf-8"))
+        memory_verified = any(
+            item.get("write_detected") for item in verification.get("samples", [])
+        )
+
+    reasons: list[str] = []
+    if run_args.agent == "main":
+        reasons.append("eval agent is main")
+    if not memory_verified:
+        reasons.append("memory write verification failed or is not configured")
+
+    ingest_summary_path = Path(run_args.run_dir) / "ingest_summary.json"
+    if ingest_summary_path.exists():
+        ingest_summary = json.loads(ingest_summary_path.read_text(encoding="utf-8"))
+        sessions_failed = ingest_summary.get("sessions_failed", 0)
+        samples_failed = ingest_summary.get("samples_failed", 0)
+        if sessions_failed > 0 or samples_failed > 0:
+            reasons.append(
+                f"ingest had {sessions_failed} failed session(s) across {samples_failed} sample(s)"
+            )
+
+    if reasons and not args.allow_non_publishable:
+        raise SystemExit(
+            f"Backend {backend_id} is non-publishable: {'; '.join(reasons)}"
+        )
 
 
 async def run_judge_async(
@@ -664,7 +798,8 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--count", type=int, default=None, help="QA question limit")
     parser.add_argument("--user", default=None, help="Override OpenClaw user key")
-    parser.add_argument("-p", "--parallel", type=int, default=1, metavar="N", help="QA samples in flight")
+    parser.add_argument("-p", "--qa-parallel", type=int, default=5, metavar="N", help="QA samples in flight")
+    parser.add_argument("--ingest-parallel", type=int, default=4, metavar="N", help="Ingest samples in flight (requires --per-sample-agent)")
     parser.add_argument("--run-dir", default=None, help="Directory for reproducible eval artifacts")
     parser.add_argument("--agent-workspace", default=None, help="Eval agent workspace path for memory write checks")
     parser.add_argument("--include-categories", default=None, help="Comma-delimited QA categories to include")
@@ -677,6 +812,10 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--judge-base-url", default=None, help="Judge base URL recorded in manifest")
     parser.add_argument("--canary", action="store_true", default=False, help="Run cross-sample contamination canaries")
     parser.add_argument("--canary-count", type=int, default=3, help="Canary questions per sample pair")
+    parser.add_argument(
+        "--per-sample-agent", action="store_true", default=False,
+        help="Provision a separate agent+workspace per sample for full memory isolation",
+    )
 
 
 def main() -> None:
@@ -692,19 +831,21 @@ def main() -> None:
     qa_parser = subparsers.add_parser("qa", help="Run QA questions against ingested data")
     add_common_args(qa_parser)
 
-    compare_parser = subparsers.add_parser("compare", help="Ingest + QA for multiple backends")
-    add_common_args(compare_parser)
-    compare_parser.add_argument("--run-group", required=True, help="Comparison run group directory")
-    compare_parser.add_argument(
+    eval_parser = subparsers.add_parser("eval", help="Full evaluation: ingest + QA + judge + report")
+    add_common_args(eval_parser)
+    eval_parser.add_argument("--run-group", required=True, help="Run group output directory")
+    eval_parser.add_argument(
         "--backends",
         default="oo-builtin,oo-qmd,openviking",
         help="Comma-delimited backend ids",
     )
-    compare_parser.add_argument("--builtin-agent", default="eval-locomo-builtin")
-    compare_parser.add_argument("--qmd-agent", default="eval-locomo-qmd")
-    compare_parser.add_argument("--allow-non-publishable", action="store_true", default=False)
+    eval_parser.add_argument("--builtin-agent", default="eval-locomo-builtin")
+    eval_parser.add_argument("--qmd-agent", default="eval-locomo-qmd")
+    eval_parser.add_argument("--allow-non-publishable", action="store_true", default=False)
+    eval_parser.add_argument("--judge-token", default=None, help="Judge LLM API key (or set OPENAI_API_KEY)")
+    eval_parser.add_argument("--judge-parallel", type=int, default=8, help="Judge requests in flight")
 
-    judge_parser = subparsers.add_parser("judge", help="Grade QA answers with LLM judge")
+    judge_parser = subparsers.add_parser("judge", help="Grade QA answers with LLM judge (standalone)")
     judge_parser.add_argument("input", help="Path to answers JSON file")
     judge_parser.add_argument("--output", default=None, help="Path to write grades JSON")
     judge_parser.add_argument(
@@ -738,8 +879,8 @@ def main() -> None:
         run_ingest(args)
     elif args.mode == "qa":
         run_qa(args)
-    elif args.mode == "compare":
-        run_collect(args)
+    elif args.mode == "eval":
+        run_pipeline(args)
 
 
 if __name__ == "__main__":
