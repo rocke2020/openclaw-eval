@@ -1,1 +1,0 @@
-Caroline and Melanie wrapped up their group chat conversation. Caroline signed off to go do research, while Melanie left to go swimming with her kids, with a plan to talk again soon.
