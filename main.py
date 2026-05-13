@@ -38,6 +38,9 @@ import asyncio
 import copy
 import json
 import os
+import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -77,6 +80,120 @@ from lib.openclaw import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+STRICT_MEMORY_TOOLS = {"memory_search", "memory_get"}
+STRICT_FORBIDDEN_TOOLS = {
+    "exec",
+    "process",
+    "read",
+    "write",
+    "edit",
+    "apply_patch",
+    "image",
+    "sessions_list",
+    "sessions_history",
+    "sessions_send",
+    "sessions_spawn",
+    "sessions_yield",
+    "subagents",
+    "session_status",
+    "browser",
+    "canvas",
+    "nodes",
+    "cron",
+    "gateway",
+    "message",
+    "web_search",
+    "web_fetch",
+    "x_search",
+}
+
+
+def _openclaw_json(profile: str, *args: str) -> object:
+    openclaw_bin = shutil.which("openclaw")
+    if not openclaw_bin:
+        raise RuntimeError("openclaw binary not found")
+    result = subprocess.run(
+        [openclaw_bin, "--profile", profile, *args],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        stdout = result.stdout.strip()
+        raise RuntimeError(stderr or stdout or f"openclaw {' '.join(args)} failed")
+    return json.loads(result.stdout)
+
+
+def verify_strict_eval_isolation(profile: str, agent: str) -> dict:
+    """Verify eval profile exposes only builtin memory tools and no skills."""
+    tools_allow = _openclaw_json(profile, "config", "get", "tools.allow", "--json")
+    tools_deny = _openclaw_json(profile, "config", "get", "tools.deny", "--json")
+    elevated_enabled = _openclaw_json(profile, "config", "get", "tools.elevated.enabled", "--json")
+    skills = _openclaw_json(profile, "skills", "check", "--agent", agent, "--json")
+
+    allow_set = set(tools_allow if isinstance(tools_allow, list) else [])
+    deny_set = set(tools_deny if isinstance(tools_deny, list) else [])
+    model_visible = skills.get("modelVisible", []) if isinstance(skills, dict) else []
+    command_visible = skills.get("commandVisible", []) if isinstance(skills, dict) else []
+
+    failures = []
+    if allow_set != STRICT_MEMORY_TOOLS:
+        failures.append(f"tools.allow must be exactly {sorted(STRICT_MEMORY_TOOLS)}, got {sorted(allow_set)}")
+    missing_denies = sorted(STRICT_FORBIDDEN_TOOLS - deny_set)
+    if missing_denies:
+        failures.append(f"tools.deny missing forbidden tools: {missing_denies}")
+    if elevated_enabled is not False:
+        failures.append(f"tools.elevated.enabled must be false, got {elevated_enabled!r}")
+    if model_visible:
+        failures.append(f"modelVisible skills must be empty, got {model_visible}")
+    if command_visible:
+        failures.append(f"commandVisible skills must be empty, got {command_visible}")
+
+    return {
+        "ok": not failures,
+        "profile": profile,
+        "agent": agent,
+        "tools_allow": sorted(allow_set),
+        "forbidden_tools_denied": sorted(STRICT_FORBIDDEN_TOOLS & deny_set),
+        "missing_forbidden_denies": missing_denies,
+        "elevated_enabled": elevated_enabled,
+        "model_visible": model_visible,
+        "command_visible": command_visible,
+        "failures": failures,
+    }
+
+
+def enforce_strict_eval_isolation(args: argparse.Namespace) -> dict:
+    report = verify_strict_eval_isolation(args.openclaw_profile, args.agent)
+    if not report["ok"]:
+        print("Strict eval isolation check failed:", file=sys.stderr)
+        for failure in report["failures"]:
+            print(f"  - {failure}", file=sys.stderr)
+        raise SystemExit(2)
+    return report
+
+
+def strict_isolation_agents_for_args(args: argparse.Namespace) -> list[str]:
+    if args.mode != "eval":
+        return [args.agent]
+    agents = []
+    backends = [item.strip() for item in args.backends.split(",") if item.strip()]
+    if "oo-builtin" in backends:
+        agents.append(args.builtin_agent)
+    if "oo-qmd" in backends:
+        agents.append(args.qmd_agent)
+    return agents or [args.agent]
+
+
+def enforce_strict_eval_isolation_for_args(args: argparse.Namespace) -> list[dict]:
+    reports = []
+    for agent in strict_isolation_agents_for_args(args):
+        check_args = copy.copy(args)
+        check_args.agent = agent
+        reports.append(enforce_strict_eval_isolation(check_args))
+    return reports
 
 
 def parse_test_file(path: str) -> list[dict]:
@@ -574,14 +691,106 @@ def run_canaries(samples: list[dict], args: argparse.Namespace) -> list[dict]:
     records = []
     for pair in select_canary_pairs(samples, args.canary_count):
         target_user = args.user or pair["target_user"]
+        target_agent, target_workspace = _resolve_sample_agent(args, pair["target_sample_id"])
+        canary_args = copy.copy(args)
+        canary_args.agent = target_agent
         try:
-            response, usage = _call_answer(args, target_user, pair["question"])
+            response, usage = _call_answer(canary_args, target_user, pair["question"])
         except Exception as e:
             response = f"[ERROR] {e}"
             usage = {}
-        records.append({**pair, "target_user": target_user, "response": response, "usage": usage})
-        _maybe_reset_session(args, target_user)
+        records.append(
+            {
+                **pair,
+                "target_user": target_user,
+                "target_agent": target_agent,
+                "target_workspace": target_workspace,
+                "response": response,
+                "usage": usage,
+                "leak_detected": canary_response_leaked(pair["expected"], response),
+            }
+        )
+        _maybe_reset_session(canary_args, target_user)
     return records
+
+
+CANARY_REFUSAL_MARKERS = (
+    "i don't have",
+    "i do not have",
+    "don't have any",
+    "do not have any",
+    "no information",
+    "nothing in my memory",
+    "fresh workspace",
+    "blank slate",
+    "can't answer",
+    "cannot answer",
+    "couldn't find",
+    "could not find",
+    "no mention",
+    "no record",
+    "not in my memory",
+)
+
+CANARY_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "as",
+    "at",
+    "between",
+    "by",
+    "for",
+    "from",
+    "in",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+}
+
+
+def canary_response_leaked(expected: str, response: str) -> bool:
+    """Return True when a canary response appears to reveal source-sample facts."""
+    response_norm = " ".join(str(response or "").casefold().split())
+    if not response_norm or response_norm.startswith("[error]"):
+        return False
+    if any(marker in response_norm for marker in CANARY_REFUSAL_MARKERS):
+        return False
+
+    expected_terms = {
+        term
+        for term in re.findall(r"[a-z0-9]+", str(expected or "").casefold())
+        if len(term) >= 3 and term not in CANARY_STOPWORDS
+    }
+    if not expected_terms:
+        return False
+
+    matched_terms = {term for term in expected_terms if term in response_norm}
+    return len(matched_terms) >= min(2, len(expected_terms))
+
+
+def count_canary_leakage(canary_path: Path) -> int:
+    if not canary_path.exists():
+        return 0
+    leakage_count = 0
+    with canary_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            if "expected" in record and "response" in record:
+                leaked = canary_response_leaked(
+                    str(record.get("expected", "")),
+                    str(record.get("response", "")),
+                )
+            else:
+                leaked = record.get("leak_detected") is True
+            if leaked:
+                leakage_count += 1
+    return leakage_count
 
 
 def run_pipeline(args: argparse.Namespace) -> None:
@@ -781,6 +990,8 @@ def _write_judge_reports(output_path: str, judge_summary: dict) -> None:
         if not memory_verified:
             reasons.append("memory write verification failed or is not configured")
 
+        canary_leakage_count = count_canary_leakage(backend_dir / "canary.jsonl")
+
         summaries.append({
             "backend_id": backend_id,
             "backend_kind": backend_manifest.get("backend_kind", ""),
@@ -790,7 +1001,7 @@ def _write_judge_reports(output_path: str, judge_summary: dict) -> None:
             "judge_score": judge_score,
             "per_category": per_category,
             "memory_write_verified": memory_verified,
-            "canary_leakage_count": 0,
+            "canary_leakage_count": canary_leakage_count,
             "total_ingest_tokens": None,
             "total_qa_tokens": total_qa_tokens,
         })
@@ -850,6 +1061,10 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         "--per-sample-agent", action="store_true", default=False,
         help="Provision a separate agent+workspace per sample for full memory isolation",
     )
+    parser.add_argument(
+        "--skip-strict-isolation-check", action="store_true", default=False,
+        help="Skip eval-profile tool/skill isolation gate",
+    )
 
 
 def main() -> None:
@@ -899,15 +1114,40 @@ def main() -> None:
     )
     judge_parser.add_argument("--parallel", type=int, default=8, help="Judge requests in flight")
 
+    isolation_parser = subparsers.add_parser("isolation", help="Verify strict eval tool/skill isolation")
+    isolation_parser.add_argument("--openclaw-profile", default="eval", help="OpenClaw profile name")
+    isolation_parser.add_argument("--agent", default="eval-locomo", help="OpenClaw agent id to inspect")
+    isolation_parser.add_argument("--json", action="store_true", default=False, help="Output JSON report")
+
     args = parser.parse_args()
 
     if args.mode == "judge":
         asyncio.run(run_judge_async(args.input, args.output, args.base_url, args.token, args.model, args.parallel))
         return
 
+    if args.mode == "isolation":
+        report = verify_strict_eval_isolation(args.openclaw_profile, args.agent)
+        if args.json:
+            print(json.dumps(report, indent=2))
+        elif report["ok"]:
+            print(
+                f"Strict eval isolation OK for profile={args.openclaw_profile} agent={args.agent}: "
+                f"tools={report['tools_allow']}, skills hidden"
+            )
+        else:
+            print("Strict eval isolation FAILED:", file=sys.stderr)
+            for failure in report["failures"]:
+                print(f"  - {failure}", file=sys.stderr)
+        if not report["ok"]:
+            sys.exit(2)
+        return
+
     if not args.token and not getattr(args, "viking", False):
         print("Error: --token or OPENCLAW_GATEWAY_TOKEN env var is required", file=sys.stderr)
         sys.exit(1)
+
+    if args.mode in {"qa", "eval"} and not args.skip_strict_isolation_check and not getattr(args, "viking", False):
+        enforce_strict_eval_isolation_for_args(args)
 
     if args.mode == "ingest":
         run_ingest(args)

@@ -261,6 +261,7 @@ def render_comparison_report_html(group_manifest: dict, backend_summaries: list[
             f"<td>{html.escape(str(summary.get('qa_total', 0)))}</td>"
             f"<td>{summary.get('judge_score', 0.0):.2%}</td>"
             f"<td>{html.escape(str(summary.get('memory_write_verified', False)))}</td>"
+            f"<td>{html.escape(str(summary.get('canary_leakage_count', 0)))}</td>"
             f"<td>{html.escape('; '.join(summary.get('non_publishable_reasons', [])))}</td>"
             "</tr>"
         )
@@ -282,7 +283,7 @@ def render_comparison_report_html(group_manifest: dict, backend_summaries: list[
         "th{background:#f6f6f6}</style></head><body>"
         f"<h1>{html.escape(str(group_manifest.get('run_group_id', 'comparison')))}</h1>"
         "<table><thead><tr><th>Backend</th><th>Kind</th><th>Publishable</th>"
-        "<th>QA total</th><th>Score</th><th>Memory writes</th><th>Notes</th></tr></thead>"
+        "<th>QA total</th><th>Score</th><th>Memory writes</th><th>Canary leaks</th><th>Notes</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
         f"{''.join(category_sections)}"
         "</body></html>"

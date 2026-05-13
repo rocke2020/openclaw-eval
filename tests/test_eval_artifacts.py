@@ -13,7 +13,7 @@ from lib.artifacts import (
     write_manifest,
 )
 import main as main_module
-from main import select_canary_pairs
+from main import count_canary_leakage, select_canary_pairs, verify_strict_eval_isolation
 
 
 class EvalArtifactsTests(unittest.TestCase):
@@ -65,6 +65,115 @@ class EvalArtifactsTests(unittest.TestCase):
         )
         self.assertEqual(pairs[0]["source_sample_id"], "conv-30")
         self.assertEqual(pairs[0]["target_user"], "eval-conv-26")
+
+    def test_run_canaries_uses_target_sample_agent(self):
+        samples = [
+            {"sample_id": "conv-26", "qa": [{"question": "q1", "answer": "alpha beta"}]},
+            {"sample_id": "conv-30", "qa": [{"question": "q2", "answer": "gamma delta"}]},
+        ]
+        args = argparse.Namespace(canary_count=1, user=None, agent="base-agent")
+        called_agents = []
+
+        def fake_resolve(_args, sample_id):
+            return f"base-agent-{sample_id}", f"/tmp/{sample_id}"
+
+        def fake_call(call_args, user_key, question):
+            called_agents.append((call_args.agent, user_key, question))
+            return ("I don't have any information about that.", {})
+
+        with (
+            mock.patch.object(main_module, "_resolve_sample_agent", side_effect=fake_resolve),
+            mock.patch.object(main_module, "_call_answer", side_effect=fake_call),
+            mock.patch.object(main_module, "_maybe_reset_session"),
+        ):
+            records = main_module.run_canaries(samples, args)
+
+        self.assertEqual(
+            called_agents,
+            [
+                ("base-agent-conv-26", "eval-conv-26", "q2"),
+                ("base-agent-conv-30", "eval-conv-30", "q1"),
+            ],
+        )
+        self.assertEqual(records[0]["target_agent"], "base-agent-conv-26")
+        self.assertEqual(records[1]["target_agent"], "base-agent-conv-30")
+
+    def test_count_canary_leakage_scores_non_refusal_expected_terms(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "canary.jsonl"
+            records = [
+                {
+                    "expected": "mansion in Japan, luxury car Ferrari 488 GTB",
+                    "response": "Calvin bought a mansion and a luxury Ferrari.",
+                },
+                {
+                    "expected": "between 26 March and 20 April 2023",
+                    "response": "I don't have any information about Calvin traveling to Tokyo.",
+                },
+                {
+                    "expected": "get endorsements, build his brand, do charity work",
+                    "leak_detected": True,
+                    "response": "I searched my memory files and there is no mention of anyone named John or his basketball career.",
+                },
+            ]
+            path.write_text(
+                "\n".join(json.dumps(record) for record in records) + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(count_canary_leakage(path), 1)
+
+    def test_verify_strict_eval_isolation_requires_memory_only_tools(self):
+        responses = {
+            ("eval", "config", "get", "tools.allow", "--json"): ["memory_search", "memory_get"],
+            ("eval", "config", "get", "tools.deny", "--json"): sorted(main_module.STRICT_FORBIDDEN_TOOLS),
+            ("eval", "config", "get", "tools.elevated.enabled", "--json"): False,
+            ("eval", "skills", "check", "--agent", "eval-locomo", "--json"): {
+                "modelVisible": [],
+                "commandVisible": [],
+            },
+        }
+
+        def fake_openclaw_json(profile, *args):
+            return responses[(profile, *args)]
+
+        with mock.patch.object(main_module, "_openclaw_json", side_effect=fake_openclaw_json):
+            report = verify_strict_eval_isolation("eval", "eval-locomo")
+
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["tools_allow"], ["memory_get", "memory_search"])
+
+    def test_verify_strict_eval_isolation_fails_when_exec_allowed(self):
+        responses = {
+            ("eval", "config", "get", "tools.allow", "--json"): ["memory_search", "memory_get", "exec"],
+            ("eval", "config", "get", "tools.deny", "--json"): sorted(main_module.STRICT_FORBIDDEN_TOOLS - {"exec"}),
+            ("eval", "config", "get", "tools.elevated.enabled", "--json"): False,
+            ("eval", "skills", "check", "--agent", "eval-locomo", "--json"): {
+                "modelVisible": [],
+                "commandVisible": [],
+            },
+        }
+
+        def fake_openclaw_json(profile, *args):
+            return responses[(profile, *args)]
+
+        with mock.patch.object(main_module, "_openclaw_json", side_effect=fake_openclaw_json):
+            report = verify_strict_eval_isolation("eval", "eval-locomo")
+
+        self.assertFalse(report["ok"])
+        self.assertIn("tools.allow must be exactly", report["failures"][0])
+        self.assertIn("exec", report["failures"][1])
+
+    def test_eval_isolation_gate_checks_backend_agents(self):
+        args = argparse.Namespace(
+            mode="eval",
+            backends="oo-builtin,openviking",
+            agent="default-agent",
+            builtin_agent="builtin-agent",
+            qmd_agent="qmd-agent",
+        )
+
+        self.assertEqual(main_module.strict_isolation_agents_for_args(args), ["builtin-agent"])
 
     def test_run_qa_writes_strict_artifacts_with_mocked_backend(self):
         sample = {
