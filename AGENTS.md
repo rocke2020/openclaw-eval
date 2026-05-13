@@ -38,6 +38,6 @@ Recent history uses short imperative subjects, often `feat:`, `fix:`, and `docs:
 
 ## Security & Data Safety
 
-Never delete database or vector-store data from code, tests, or scripts unless explicitly requested and the target is verified. Treat `data/vectordb/`, `data/viking/`, and `output/runs/` as valuable local state. Keep API tokens and backend credentials out of commits.
+Never delete database or vector-store data from code, tests, or scripts unless explicitly requested and the target is verified. Treat `data/vectordb/` and `output/runs/` as valuable local state. Keep API tokens and backend credentials out of commits.
 
 For strict memory evaluation, the eval profile should expose no agent skills. Verify with `openclaw --profile eval skills check --agent eval-locomo --json`; `modelVisible` and `commandVisible` should be empty. The profile uses `agents.defaults.skills=[]`; restart the eval gateway after changing it.
