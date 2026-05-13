@@ -105,7 +105,7 @@ def parse_test_file(path: str) -> list[dict]:
 def _call_ingest(args, user_key: str, message: str) -> tuple[str, dict]:
     backend = getattr(args, "backend", None)
     if backend is not None:
-        return backend.ingest(user_key, message)
+        return backend.ingest(user_key, message, agent=getattr(args, "agent", None))
     if getattr(args, "viking", False):
         from lib.openviking import add_memory
 
@@ -126,7 +126,7 @@ def _call_ingest(args, user_key: str, message: str) -> tuple[str, dict]:
 def _call_answer(args, user_key: str, question: str) -> tuple[str, dict]:
     backend = getattr(args, "backend", None)
     if backend is not None:
-        return backend.answer(user_key, question)
+        return backend.answer(user_key, question, agent=getattr(args, "agent", None))
 
     def _reset_for_retry() -> None:
         _maybe_reset_session(args, user_key)

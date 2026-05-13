@@ -14,9 +14,9 @@ class MemoryBackend(Protocol):
     backend_id: str
     backend_kind: str
 
-    def ingest(self, user: str, message: str) -> tuple[str, dict]: ...
+    def ingest(self, user: str, message: str, agent: str | None = None) -> tuple[str, dict]: ...
 
-    def answer(self, user: str, question: str) -> tuple[str, dict]: ...
+    def answer(self, user: str, question: str, agent: str | None = None) -> tuple[str, dict]: ...
 
     def manifest_config(self) -> dict: ...
 
@@ -30,11 +30,15 @@ class OpenClawBackend:
     expected_memory_backend: str
     backend_kind: str = "openclaw"
 
-    def ingest(self, user: str, message: str) -> tuple[str, dict]:
-        return send_message_with_retry(self.base_url, self.token, user, message, agent=self.agent)
+    def ingest(self, user: str, message: str, agent: str | None = None) -> tuple[str, dict]:
+        return send_message_with_retry(
+            self.base_url, self.token, user, message, agent=agent or self.agent,
+        )
 
-    def answer(self, user: str, question: str) -> tuple[str, dict]:
-        return send_message_with_retry(self.base_url, self.token, user, question, agent=self.agent)
+    def answer(self, user: str, question: str, agent: str | None = None) -> tuple[str, dict]:
+        return send_message_with_retry(
+            self.base_url, self.token, user, question, agent=agent or self.agent,
+        )
 
     def manifest_config(self) -> dict:
         return {
@@ -52,13 +56,13 @@ class OpenVikingBackend:
     answer_mode: str = "openviking-search-rag"
     backend_kind: str = "openviking"
 
-    def ingest(self, user: str, message: str) -> tuple[str, dict]:
+    def ingest(self, user: str, message: str, agent: str | None = None) -> tuple[str, dict]:
         result = add_memory(message, self.account, user, self.agent_id)
         if result["returncode"] != 0:
             raise RuntimeError(result["stderr"].strip() or "ov add-memory failed")
         return "[openviking] saved", result
 
-    def answer(self, user: str, question: str) -> tuple[str, dict]:
+    def answer(self, user: str, question: str, agent: str | None = None) -> tuple[str, dict]:
         result = search(question, self.account, user, self.agent_id)
         if result["returncode"] != 0:
             raise RuntimeError(result["stderr"].strip() or "ov search failed")
