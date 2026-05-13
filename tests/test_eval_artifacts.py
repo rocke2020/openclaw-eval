@@ -13,7 +13,13 @@ from lib.artifacts import (
     write_manifest,
 )
 import main as main_module
-from main import count_canary_leakage, select_canary_pairs, verify_strict_eval_isolation
+from main import (
+    canary_record_leaked,
+    count_canary_leakage,
+    select_adversarial_canary_pairs,
+    select_canary_pairs,
+    verify_strict_eval_isolation,
+)
 
 
 class EvalArtifactsTests(unittest.TestCase):
@@ -65,6 +71,35 @@ class EvalArtifactsTests(unittest.TestCase):
         )
         self.assertEqual(pairs[0]["source_sample_id"], "conv-30")
         self.assertEqual(pairs[0]["target_user"], "eval-conv-26")
+
+    def test_adversarial_canary_pairs_include_standard_live_cases(self):
+        samples = [
+            {"sample_id": "conv-47", "qa": []},
+            {"sample_id": "conv-48", "qa": []},
+            {"sample_id": "conv-49", "qa": []},
+            {"sample_id": "conv-50", "qa": []},
+        ]
+        args = argparse.Namespace(
+            openclaw_home="/tmp/openclaw-eval",
+            per_sample_agent=False,
+            agent_workspace="/tmp/workspace",
+            agent="eval-locomo",
+        )
+
+        pairs = select_adversarial_canary_pairs(samples, args)
+
+        self.assertEqual(len(pairs), 7)
+        self.assertEqual(
+            {pair["suite"] for pair in pairs},
+            {"deborah_karlie", "calvin_ferrari"},
+        )
+        self.assertTrue(
+            any(
+                pair["question"].startswith("Strict isolation canary. What items did Calvin buy in March 2023?")
+                for pair in pairs
+            )
+        )
+        self.assertTrue(all(pair["type"] == "adversarial_isolation_canary" for pair in pairs))
 
     def test_run_canaries_uses_target_sample_agent(self):
         samples = [
@@ -122,6 +157,32 @@ class EvalArtifactsTests(unittest.TestCase):
             )
 
             self.assertEqual(count_canary_leakage(path), 1)
+
+    def test_marker_canary_does_not_count_prompt_terms_as_leaks(self):
+        self.assertFalse(
+            canary_record_leaked(
+                {
+                    "leak_markers": ["ferrari 488", "488 gtb", "mansion"],
+                    "response": "I don't have any information about Calvin, Ferrari, Dave, or Aerosmith.",
+                }
+            )
+        )
+        self.assertFalse(
+            canary_record_leaked(
+                {
+                    "leak_markers": ["karlie", "january 25", "both parents"],
+                    "response": "I found no information about Deborah or Karlie.",
+                }
+            )
+        )
+        self.assertTrue(
+            canary_record_leaked(
+                {
+                    "leak_markers": ["ferrari 488", "488 gtb", "mansion"],
+                    "response": "Calvin bought a Ferrari 488 GTB and a mansion.",
+                }
+            )
+        )
 
     def test_verify_strict_eval_isolation_requires_memory_only_tools(self):
         responses = {
