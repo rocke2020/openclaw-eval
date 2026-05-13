@@ -1,0 +1,4 @@
+interface:
+  display_name: "Full Eval Run"
+  short_description: "Run final LoCoMo evals without contaminating results"
+  default_prompt: "Use $full-eval-run to prepare and verify a final benchmark run."
