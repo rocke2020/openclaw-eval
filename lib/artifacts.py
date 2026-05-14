@@ -80,6 +80,18 @@ def git_dirty() -> bool | None:
     return bool(result.stdout.strip())
 
 
+def openclaw_cli_version() -> str | None:
+    result = subprocess.run(
+        ["openclaw", "--version"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
 def summarize_usage(records: list[dict]) -> dict:
     usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     for record in records:
@@ -111,6 +123,7 @@ def build_manifest(args, samples: list[dict], stats: dict, backend_config: dict 
         "openclaw_agent": getattr(args, "agent", None),
         "openclaw_model": f"openclaw/{getattr(args, 'agent', 'main')}",
         "openclaw_profile": getattr(args, "openclaw_profile", None),
+        "openclaw_version": openclaw_cli_version(),
         "openviking_account": getattr(args, "openviking_account", None),
         "openviking_user": getattr(args, "openviking_user", None),
         "openviking_agent_id": getattr(args, "openviking_agent_id", None),
@@ -224,6 +237,7 @@ def render_report_html(
         ("Run", manifest.get("run_id")),
         ("Backend", manifest.get("backend_id")),
         ("Agent", manifest.get("openclaw_agent")),
+        ("OpenClaw version", manifest.get("openclaw_version")),
         ("Dataset", manifest.get("dataset_path")),
         ("Selected QA", qa_summary.get("total")),
         ("Judge score", score or "not judged"),
@@ -257,6 +271,7 @@ def render_comparison_report_html(group_manifest: dict, backend_summaries: list[
             "<tr>"
             f"<td>{html.escape(str(summary.get('backend_id')))}</td>"
             f"<td>{html.escape(str(summary.get('backend_kind', '')))}</td>"
+            f"<td>{html.escape(str(summary.get('openclaw_version') or ''))}</td>"
             f"<td>{html.escape(str(summary.get('publishable', False)))}</td>"
             f"<td>{html.escape(str(summary.get('qa_total', 0)))}</td>"
             f"<td>{summary.get('judge_score', 0.0):.2%}</td>"
@@ -282,7 +297,7 @@ def render_comparison_report_html(group_manifest: dict, backend_summaries: list[
         "th,td{border:1px solid #ddd;padding:.5rem;text-align:left}"
         "th{background:#f6f6f6}</style></head><body>"
         f"<h1>{html.escape(str(group_manifest.get('run_group_id', 'comparison')))}</h1>"
-        "<table><thead><tr><th>Backend</th><th>Kind</th><th>Publishable</th>"
+        "<table><thead><tr><th>Backend</th><th>Kind</th><th>OpenClaw version</th><th>Publishable</th>"
         "<th>QA total</th><th>Score</th><th>Memory writes</th><th>Canary leaks</th><th>Notes</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
         f"{''.join(category_sections)}"

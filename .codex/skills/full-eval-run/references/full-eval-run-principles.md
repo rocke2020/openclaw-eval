@@ -26,16 +26,18 @@ The command must print nothing for a final benchmark row.
 
 ## Isolated Runtime State
 
-Do not delete existing eval memory or session files to prepare a run. Use a fresh agent and workspace for each primary backend run, for example:
+Do not delete existing eval memory or session files to prepare a run. The only publishable OpenClaw isolation mode is per-sample: pass a base agent and base workspace, and let the harness provision one effective agent/workspace per selected LoCoMo sample.
 
 ```text
-agent:     eval-locomo-builtin-full
-workspace: ~/.openclaw-eval/workspace-locomo-builtin-full
+base agent:     eval-locomo-builtin-full
+base workspace: ~/.openclaw-eval/workspace-locomo-builtin-full
+sample agent:   eval-locomo-builtin-full-conv-26
+sample workspace: ~/.openclaw-eval/workspace-locomo-builtin-full-conv-26
 ```
 
-This avoids contamination from smoke runs and preserves prior artifacts for audit.
+This avoids cross-sample contamination and preserves prior artifacts for audit.
 
-The fresh agent must be configured in `~/.openclaw-eval/openclaw.json` before the run. After changing agent config, restart the eval gateway and verify the run uses the intended route. For builtin comparison runs, pass the same agent and workspace explicitly:
+The base agent can be configured in `~/.openclaw-eval/openclaw.json` before the run, but final publishability depends on the derived per-sample agents. When `--agent-workspace` is present, the harness creates missing sample agents as `<base-agent>-<sample_id>` with workspaces derived as `<base-workspace>-<sample_id>`, then restarts the gateway after batch provisioning. For builtin comparison runs, pass the base agent and base workspace explicitly:
 
 ```bash
 openclaw --profile eval agents add eval-locomo-builtin-full \
@@ -49,16 +51,16 @@ openclaw --profile eval agents list --json
 openclaw --profile eval skills check --agent eval-locomo-builtin-full --json
 ```
 
-If `agents add` reports that the agent already exists, do not assume it is fresh. Verify the listed workspace path and inspect it for existing `MEMORY.md` or `memory/*.md`; choose a new agent/workspace name if prior memory exists.
+If `agents add` reports that the base agent or any derived sample agent already exists, do not assume it is fresh. Verify the listed workspace path and inspect the derived sample workspaces for existing `MEMORY.md` or `memory/*.md`; choose a new base agent/workspace name if prior memory exists.
 
-Use the same agent and workspace in the eval command:
+Use the base agent and base workspace in the eval command:
 
 ```bash
 --builtin-agent eval-locomo-builtin-full
 --agent-workspace ~/.openclaw-eval/workspace-locomo-builtin-full
 ```
 
-After ingest starts, confirm `manifest.json` records the same `openclaw_agent`, and `backend_config.agent` matches the intended builtin agent.
+After ingest starts, confirm `manifest.json` records the base `openclaw_agent`, `backend_config.agent` matches the intended backend base agent, and `memory_write_verification.json.samples[*]` contains one entry per selected sample.
 
 Do not pass `--user` for primary multi-sample runs. The harness defaults to one user key per LoCoMo sample; overriding `--user` collapses samples into one memory namespace and invalidates isolation.
 
@@ -130,18 +132,18 @@ For DeepSeek judge runs, verify the judge key is present:
 test -n "$DEEPSEEK_API_KEY" && echo "DEEPSEEK_API_KEY=set"
 ```
 
-If the local environment has SOCKS proxy variables and `judge.py` fails with a missing `socksio` error, clear proxy variables for the judge process:
+If the local environment has SOCKS proxy variables and the judge subcommand fails with a missing `socksio` error, clear proxy variables for the judge process:
 
 ```bash
 env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy \
-  PYTHONPATH=. uv run python judge.py ...
+  PYTHONPATH=. uv run python main.py judge ...
 ```
 
 ## Run Order
 
 1. Verify clean git state.
-2. Create or select a fresh agent/workspace for the backend.
-3. Verify skills are not visible to the eval agent.
+2. Create or select a fresh base agent/workspace for the backend; per-sample agents/workspaces are derived from that base.
+3. Verify skills are not visible to the base eval agent and any effective per-sample agents used by the run.
 4. Restart the eval gateway after config changes.
 5. Run ingest and QA into a new `output/runs/<run-group>/<backend-id>/` directory.
 6. For multi-sample final runs, either enable contamination canaries with `--canary` or record that canaries were intentionally skipped.
@@ -153,7 +155,7 @@ Builtin full-run command shape:
 ```bash
 RUN_GROUP="output/runs/builtin-memory-full-$(date +%Y%m%d-%H%M%S)"
 
-OPENCLAW_GATEWAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN" PYTHONPATH=. uv run python eval.py compare locomo10.json \
+OPENCLAW_GATEWAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN" PYTHONPATH=. uv run python main.py eval locomo10.json \
   --run-group "$RUN_GROUP" \
   --backends oo-builtin \
   --builtin-agent eval-locomo-builtin-full \
@@ -167,7 +169,7 @@ OPENCLAW_GATEWAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN" PYTHONPATH=. uv run python eval
   --canary
 
 env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy \
-  PYTHONPATH=. uv run python judge.py "$RUN_GROUP/oo-builtin/answers.json" \
+  PYTHONPATH=. uv run python main.py judge "$RUN_GROUP/oo-builtin/answers.json" \
   --output "$RUN_GROUP/oo-builtin/judge_grades.json" \
   --base-url https://api.deepseek.com/v1 \
   --token "$DEEPSEEK_API_KEY" \
@@ -180,8 +182,8 @@ Use a sampled scope first when validating pipeline changes; use all of `locomo10
 Easy-to-confuse flags:
 
 - `--openclaw-home` must point at `~/.openclaw-eval`; otherwise session reset looks in the default OpenClaw profile.
-- `--agent-workspace` must be the same workspace configured for `--builtin-agent`; otherwise memory-write verification checks the wrong files.
-- `--judge-model` and the later `judge.py --model` must match; the manifest records the former, while `judge_grades.json` is produced by the latter.
+- `--agent-workspace` is the required base workspace for per-sample OpenClaw isolation. The harness derives sample workspaces from it; without this flag memory-write verification is `not_configured` and the run is non-publishable.
+- `--judge-model` and any later `main.py judge --model` rerun must match; the manifest records the former, while `judge_grades.json` is produced by the latter.
 - Do not use `--allow-non-publishable` for final rows. It is acceptable only while debugging setup failures.
 
 ## Post-Run Checks
@@ -201,9 +203,9 @@ jq '.results | length' "$RUN_GROUP/oo-builtin/answers.json"
 Accept the run only if:
 
 - `eval_repo_dirty=false`
-- `openclaw_agent` and `backend_config.agent` match the intended fresh agent
+- `openclaw_agent` and `backend_config.agent` match the intended backend base agent
 - `memory_write_verification` is `configured`
-- at least one selected sample has `write_detected=true`
+- every selected sample has a per-sample verification entry with `write_detected=true`
 - `dataset_qa_count_selected` matches the declared scope
 - `judge_grades.json.total` matches `answers.json.summary.total`
 - `judge_grades.json.grades | length` matches `answers.json.results | length`

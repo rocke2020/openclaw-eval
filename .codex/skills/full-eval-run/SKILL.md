@@ -17,16 +17,17 @@ Read [references/full-eval-run-principles.md](references/full-eval-run-principle
 
 1. Declare the dataset scope before running anything. Distinguish smoke, sampled, and full `locomo10.json` runs.
 2. Verify the repo is clean with `git status --short`; final rows require no output and `eval_repo_dirty=false`.
-3. Use a fresh eval agent and workspace for each primary backend run. Do not delete prior memory or session state to create freshness.
-4. Disable and verify skill visibility for the eval agent. `modelVisible` and `commandVisible` must be empty.
+3. Use per-sample isolation for every publishable OpenClaw run. Pass a base eval agent plus `--agent-workspace`; the harness provisions `<base-agent>-<sample_id>` and `<base-workspace>-<sample_id>` automatically. Do not delete prior memory or session state to create freshness.
+4. Disable and verify skill visibility for the base eval agent and the effective per-sample agents. `modelVisible` and `commandVisible` must be empty.
 5. Verify eval-profile gateway, backend, model, memory, and auth settings before ingest.
-6. Run ingest and QA into a new `output/runs/<run-group>/<backend-id>/` directory, with canaries enabled for multi-sample final runs unless intentionally recorded as skipped.
+6. Run ingest and QA into a new `output/runs/<run-group>/<backend-id>/` directory, with `--agent-workspace` configured. Enable canaries for multi-sample final runs unless intentionally recorded as skipped.
 7. Run the judge against `answers.json` and verify judge totals match answer totals.
 8. Accept and report only artifact-backed values from `manifest.json`, summaries, `memory_write_verification.json`, `answers.json`, and `judge_grades.json`.
 
 ## Hard Rules
 
 - Never imply a sampled run represents all LoCoMo10.
+- Never run a publishable OpenClaw final row without per-sample isolation via `--agent-workspace`.
 - Never pass `--user` for primary multi-sample runs.
 - Never use `--allow-non-publishable` for final rows.
 - Never report scores from `comparison_summary.json` or `comparison_report.html` unless regenerated after judging.
@@ -38,9 +39,9 @@ Read [references/full-eval-run-principles.md](references/full-eval-run-principle
 Before saying a full eval result is valid, confirm:
 
 - `eval_repo_dirty=false`
-- `openclaw_agent` and `backend_config.agent` match the intended fresh agent
+- `openclaw_agent` and `backend_config.agent` match the intended base agent for the backend
 - `memory_write_verification` is `configured`
-- at least one selected sample has `write_detected=true`
+- every selected sample has a per-sample verification entry with `write_detected=true`
 - `dataset_qa_count_selected` matches the declared scope
 - `judge_grades.json.total` matches `answers.json.summary.total`
 - `judge_grades.json.grades | length` matches `answers.json.results | length`

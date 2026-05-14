@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from lib.artifacts import (
+    build_manifest,
     render_comparison_report_html,
     render_report_html,
     sha256_file,
@@ -47,19 +48,62 @@ class EvalArtifactsTests(unittest.TestCase):
             self.assertEqual(data["summary"], {"total": 1})
 
     def test_render_report_html_includes_score_and_manifest(self):
-        html = render_report_html({"run_id": "r1"}, {"total": 2}, {"score": 0.5})
+        html = render_report_html(
+            {"run_id": "r1", "openclaw_version": "OpenClaw 2026.5.7 (eeef486)"},
+            {"total": 2},
+            {"score": 0.5},
+        )
         self.assertIn("r1", html)
         self.assertIn("50.00%", html)
+        self.assertIn("OpenClaw 2026.5.7 (eeef486)", html)
 
     def test_comparison_report_orders_builtin_first(self):
         html = render_comparison_report_html(
             {"run_group_id": "g1"},
             [
                 {"backend_id": "openviking", "judge_score": 0.1},
-                {"backend_id": "oo-builtin", "judge_score": 0.2},
+                {
+                    "backend_id": "oo-builtin",
+                    "judge_score": 0.2,
+                    "openclaw_version": "OpenClaw 2026.5.7 (eeef486)",
+                },
             ],
         )
         self.assertLess(html.index("oo-builtin"), html.index("openviking"))
+        self.assertIn("OpenClaw 2026.5.7 (eeef486)", html)
+
+    def test_build_manifest_records_openclaw_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "data.json"
+            data_path.write_text("[]", encoding="utf-8")
+            args = argparse.Namespace(
+                run_dir=str(Path(tmp) / "run"),
+                input=str(data_path),
+                run_group_id=None,
+                backend_id="oo-builtin",
+                backend_kind="openclaw",
+                base_url="http://127.0.0.1:19002",
+                agent="eval-locomo",
+                openclaw_profile="eval",
+                openviking_account=None,
+                openviking_user=None,
+                openviking_agent_id=None,
+                user=None,
+                include_categories=None,
+                exclude_categories=None,
+                tail=None,
+                sample=None,
+                sessions=None,
+                parallel=None,
+                agent_workspace=None,
+                judge_model=None,
+                judge_base_url=None,
+            )
+
+            with mock.patch("lib.artifacts.openclaw_cli_version", return_value="OpenClaw X"):
+                manifest = build_manifest(args, [], {})
+
+        self.assertEqual(manifest["openclaw_version"], "OpenClaw X")
 
     def test_canary_pairs_next_sample_questions_to_current_user(self):
         pairs = select_canary_pairs(

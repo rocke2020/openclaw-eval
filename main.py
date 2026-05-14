@@ -1189,6 +1189,7 @@ def _write_judge_reports(output_path: str, judge_summary: dict) -> None:
         summaries.append({
             "backend_id": backend_id,
             "backend_kind": backend_manifest.get("backend_kind", ""),
+            "openclaw_version": backend_manifest.get("openclaw_version"),
             "publishable": not reasons,
             "non_publishable_reasons": reasons,
             "qa_total": qa_total,

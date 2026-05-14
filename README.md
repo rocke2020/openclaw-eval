@@ -41,7 +41,7 @@ Judge result: 29/50 correct = 58.00%
 Input tokens: 75,240 ingest + 74,880 QA = 150,120
 ```
 
-This run was for pipeline validation. Final comparison rows must be regenerated from a clean git state, fresh agent/workspace, declared dataset scope, and artifact-backed judge output.
+This run was for pipeline validation. Final comparison rows must be regenerated from a clean git state, per-sample agent/workspace isolation, declared dataset scope, and artifact-backed judge output.
 
 ## Setup
 
@@ -54,10 +54,28 @@ openclaw --profile eval gateway
 
 The harness defaults to `http://127.0.0.1:19002`, `--openclaw-profile eval`, and `--agent eval-locomo`.
 
+## Eval Environment
+
+Record the eval environment next to any published score. Current fixed OpenClaw reference:
+
+```text
+OpenClaw 2026.5.7 (eeef486)
+```
+
+Verify locally with:
+
+```bash
+openclaw --version
+git rev-parse HEAD
+git status --short
+```
+
+Run manifests now include `openclaw_version`, `eval_repo_commit`, `eval_repo_dirty`, `openclaw_base_url`, `openclaw_profile`, answer agent/model routing, judge model/base URL, dataset hash, and category policy.
+
 ## Strict Run
 
 ```bash
-uv run python eval.py ingest ./locomo10.json \
+uv run python main.py ingest ./locomo10.json \
   --base-url http://127.0.0.1:19002 \
   --agent eval-locomo \
   --openclaw-profile eval \
@@ -66,15 +84,16 @@ uv run python eval.py ingest ./locomo10.json \
   --sessions 1-4 \
   --agent-workspace ~/.openclaw-eval/workspace-locomo-eval
 
-uv run python eval.py qa ./locomo10.json \
+uv run python main.py qa ./locomo10.json \
   --base-url http://127.0.0.1:19002 \
   --agent eval-locomo \
   --openclaw-profile eval \
   --run-dir output/runs/dev-smoke \
   --sample 0 \
-  --include-categories 1,2,3,4,5
+  --include-categories 1,2,3,4,5 \
+  --agent-workspace ~/.openclaw-eval/workspace-locomo-eval
 
-uv run python judge.py output/runs/dev-smoke/answers.json \
+uv run python main.py judge output/runs/dev-smoke/answers.json \
   --output output/runs/dev-smoke/judge_grades.json \
   --model gpt-4o-mini
 ```
@@ -102,11 +121,11 @@ report.html
 ## Backend Comparison
 
 ```bash
-uv run python eval.py compare ./locomo10.json \
+uv run python main.py eval ./locomo10.json \
   --run-group output/runs/locomo-memory-comparison-001 \
   --backends oo-builtin,oo-qmd,openviking \
   --include-categories 1,2,3,4,5 \
-  --allow-non-publishable
+  --agent-workspace ~/.openclaw-eval/workspace-locomo-eval
 ```
 
 `oo-builtin` is always the baseline row. `oo-qmd` is an OpenClaw memory backend variant. `openviking` uses the OpenViking adapter and records answer mode `openviking-search-rag`.

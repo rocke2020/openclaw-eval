@@ -4,7 +4,7 @@
 
 This repository is a Python 3.13 harness for strict LoCoMo-style memory benchmarks.
 
-- `main.py` is the single CLI entry point with subcommands: `ingest`, `qa`, `compare`, `judge`.
+- `main.py` is the single CLI entry point with subcommands: `ingest`, `qa`, `eval`, `judge`, `isolation`.
 - `lib/` contains all library modules:
   - `artifacts.py` — run directory helpers, manifest building, HTML report rendering.
   - `backends.py` — backend registry (OpenClaw, OpenViking) and comparison helpers.
@@ -24,6 +24,12 @@ This repository is a Python 3.13 harness for strict LoCoMo-style memory benchmar
 - `uv run python main.py --help` shows available benchmark CLI modes.
 - `uv run python main.py ingest ./locomo10_small.json --run-dir output/runs/dev-smoke --sample 0 --sessions 1-1` runs a small ingest smoke test.
 
+## Eval Environment & Artifacts
+
+Record eval environment metadata next to any published score. The current fixed OpenClaw reference is `OpenClaw 2026.5.7 (eeef486)`, verified with `openclaw --version`.
+
+Run manifests include `openclaw_version`, `eval_repo_commit`, `eval_repo_dirty`, `openclaw_base_url`, `openclaw_profile`, answer agent/model routing, judge model/base URL, dataset hash, and category policy. Do not report scores that cannot be traced to those artifacts.
+
 ## Coding Style & Naming Conventions
 
 Use plain Python modules, standard-library types, and explicit helpers. Follow the existing style: 4-space indentation, useful type hints, `snake_case` functions and variables, and `PascalCase` test case classes. Keep changes surgical. Prefer structured JSON/path APIs over ad hoc string parsing.
@@ -41,3 +47,5 @@ Recent history uses short imperative subjects, often `feat:`, `fix:`, and `docs:
 Never delete database or vector-store data from code, tests, or scripts unless explicitly requested and the target is verified. Treat `data/vectordb/` and `output/runs/` as valuable local state. Keep API tokens and backend credentials out of commits.
 
 For strict memory evaluation, the eval profile should expose no agent skills. Verify with `openclaw --profile eval skills check --agent eval-locomo --json`; `modelVisible` and `commandVisible` should be empty. The profile uses `agents.defaults.skills=[]`; restart the eval gateway after changing it.
+
+Publishable OpenClaw eval rows must use per-sample isolation. Pass a base agent plus `--agent-workspace`; the harness provisions `<base-agent>-<sample_id>` and `<base-workspace>-<sample_id>`. A final row is invalid if `memory_write_verification` is not configured or any selected sample lacks `write_detected=true`.
