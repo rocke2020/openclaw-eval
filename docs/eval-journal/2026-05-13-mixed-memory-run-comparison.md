@@ -1,31 +1,45 @@
-# 2026-05-13 — Why two "same-logic" mixed-memory runs scored 17 points apart
+# 2026-05-13 — Three full evals, one trustworthy benchmark
 
 ## TL;DR
 
-Two single-base-agent runs on the full `locomo10.json` (10 samples, 1986 QA, categories 1-5, judge `deepseek-v4-flash`) produced very different scores:
+Three full `locomo10.json` runs (10 samples, 1986 QA, categories 1–5, judge `deepseek-v4-flash`) were produced over 36 hours. Only the last one (**C / 222431**) is a valid per-sample-isolated LoCoMo row. The earlier two are not publishable — they share the same shared-workspace flaw, and the score gap between them measures writing-policy, not memory-system quality.
 
-| Run | Date | Artifacts | Score |
-|---|---|---|---|
-| A | 2026-05-12 | `output/runs/builtin-memory-full-20260512-225733/` | **55.99%** |
-| B | 2026-05-13 | `output/runs/builtin-memory-full-20260513-111321/` | **73.31%** |
+| Run | Date | Harness commit | Per-sample isolation | Artifacts | Score | Publishable |
+|---|---|---|---|---|---|---|
+| A | 2026-05-12 | `fa02730` (pre-flag) | none — flag did not exist | `output/runs/builtin-memory-full-20260512-225733/` | **55.99%** | no |
+| B | 2026-05-13 | `cf0ef97` (broken plumbing) | flag set, but backend ignored override | `output/runs/builtin-memory-full-20260513-111321/` | **73.31%** | no |
+| C | 2026-05-13 | `11ea451` (plumbing fixed) | per-sample agent + workspace, session reset between QAs | `output/runs/builtin-memory-full-20260513-222431/` | **63.54%** | **yes** |
 
-Same model (`deepseek/deepseek-v4-flash`). Same dataset. Same harness logic in spirit (single base agent, all 10 samples writing to one shared workspace). Neither is a valid per-sample-isolated LoCoMo row.
-
-The score gap is not from model or harness wiring — it is from **how the agent wrote memory**. A's workspace shipped a pre-filled `IDENTITY.md` ("Echo, memory keeper, warm, observant"); the agent produced narrative chat recaps. B's workspace shipped the bootstrap-template `IDENTITY.md` with placeholders; the agent produced atomized fact bullets. Retrieval on bullets beats retrieval on prose.
+Same model (`deepseek/deepseek-v4-flash`). Same dataset. Same judge. The only run that survives the isolation gates is C.
 
 ## Per-category breakdown
 
-| Cat | A | B | Δ |
+| Cat | A (invalid) | B (invalid) | C (valid) |
 |-----|---|---|---|
-| 1 (single-hop)  | 56.4% | 85.8% | +29.4 |
-| 2 (temporal)    | 48.3% | 85.4% | +37.1 |
-| 3 (open-domain) | 52.1% | 72.9% | +20.8 |
-| 4 (adversarial) | 80.1% | 95.0% | +14.9 |
-| 5 (multi-hop)   | 16.6% | 15.9% | -0.7  |
+| 1 (single-hop)  | 56.4% | 85.8% | **71.3%** |
+| 2 (temporal)    | 48.3% | 85.4% | **67.9%** |
+| 3 (open-domain) | 52.1% | 72.9% | **72.9%** |
+| 4 (adversarial) | 80.1% | 95.0% | **83.5%** |
+| 5 (multi-hop)   | 16.6% | 15.9% | **15.9%** |
 
-Multi-hop (cat 5) is identically broken in both. The gap lives in factual recall (cats 1/2), where retrieval density matters.
+C is the honest number. The inflated B is what you get when the model can read raw conversation history at QA time; the depressed A is what you get when narrative-style memory writes hurt retrieval. C strips both confounds and reports what builtin memory actually delivers under proper isolation.
 
-## Side-by-side evidence
+## Why A and B are invalid
+
+Both A and B share one flaw: **all 10 samples wrote into a single base workspace.**
+
+- **A** (pre-flag): there was no `--per-sample-agent` concept; the harness used one `agent: eval-locomo-builtin-full` and one `workspace-locomo-builtin-full/` for everything. Files like `2023-06-16.md` got overwritten by whichever sample touched them last.
+- **B** (flag set, plumbing broken at `cf0ef97`): the CLI accepted `--per-sample-agent` and the harness *logged* per-sample agent names, but `OpenClawBackend.ingest/answer` did not yet forward the `agent` override to the wire (fixed in `d525884`). The base agent was used for every call, so writes again landed in the shared `workspace-locomo-builtin-full-20260513-111321/`. The 10 per-sample workspaces created by provisioning were empty after the run — `memory_write_verification.json` shows `write_detected: false` for every sample, which is the loud signal that B is invalid.
+
+In both runs, the memory subsystem cannot have been tested in isolation: cross-sample overwrites are possible, the QA agent shares its session and workspace with all other samples, and `memory_write_verification` either rubber-stamped a shared write (A) or failed outright (B).
+
+## Why A < B even though both are contaminated
+
+Two separable mechanisms compound, both unrelated to the memory system being measured:
+
+### 1. Writing policy (already in this journal — A vs B)
+
+A's workspace shipped a pre-filled `IDENTITY.md` ("Echo, memory keeper, warm, observant"); the agent produced narrative chat recaps. B's workspace shipped the bootstrap template with placeholders; the agent produced atomized fact bullets. Retrieval on bullets beats retrieval on prose.
 
 Same source conversation `2022-03-20`, after ingest:
 
@@ -56,94 +70,69 @@ B `~/.openclaw-eval/workspace-locomo-builtin-full-20260513-111321/memory/2022-03
 **James:**
 - Made a game avatar and joined a new gaming platform — loving the community
 - …
-- Dogs: Max and Daisy ❤️
-  - Shared photo: both dogs running in a field, one holding a ball
-  - …
 ```
-
-A example QA: *"When did Melanie run a charity race?"*
-- A: "in **May 2023** — it came up in a conversation she had with Caroline on **May 25, 2023**" (conflates event date with conversation date)
-- B: "on **Saturday, May 20, 2023** — she mentioned it… saying it was 'last Saturday'" (correctly separates the two)
-
-## MEMORY.md long-term file
 
 | | A | B |
 |---|---|---|
-| Size  | 338 KB | 31 KB |
-| Lines | 1,533 | 461 |
-| Style | Diary-style prose paragraphs, emotional inferences ("dream come true", "hard work paying off") | Dense fact bullets, role-disambiguated entities |
+| MEMORY.md size  | 338 KB | 31 KB |
+| MEMORY.md lines | 1,533 | 461 |
+| Style | Diary-style prose paragraphs, emotional inferences ("dream come true") | Dense fact bullets, role-disambiguated entities |
 | Same-name handling | None | Explicit (`John (basketball — different from the community/politics John)`) |
 
 A's MEMORY.md is 10× larger but its facts are buried inside narrative. B's is an index.
 
-## Confounding variables that did NOT explain the gap
+### 2. Long-context advantage from missing session reset (B alone)
 
-- Model: identical (`deepseek/deepseek-v4-flash`).
-- OpenClaw runtime: identical (`2026.5.7 eeef486`, package.json dated 5月 9).
-- Agent template (`AGENTS.md`): identical bytes (7835 each, `diff` empty).
-- Eval profile invariants: `memorySearch.sources=["memory"]`, `startupContext.enabled=false`, `plugins.slots.memory="memory-core"` — all consistent.
-- Skills exposed: 0 modelVisible, 0 commandVisible in both runs.
+B sits another step ahead of A because of the same broken plumbing that left per-sample workspaces empty. `_call_answer` was supposed to call `backend.answer(..., agent=sample_agent)`, then `_maybe_reset_session(sample_args, user_key)` was supposed to archive the session after each QA. With the override unwired, the live OpenClaw session was keyed by `(base_agent, eval-conv-XX)` while `_maybe_reset_session` looked under `(sample_agent, eval-conv-XX)` — a no-op against a session that didn't exist. The real session therefore accumulated **every ingest turn plus every prior QA** within each user's thread.
 
-## Confounding variables that DID differ (but are not the dominant driver)
+Token evidence (QA first-call input tokens — the cold-cache load of the accumulated session):
 
-| | A | B |
-|---|---|---|
-| Harness commit | pre-`cf0ef97` | `cf0ef97` (retry, parallelism, reset_between_attempts) |
-| Parallelism | serial 1 / 1 | ingest 4 / qa 5 |
-| Wall time | ~7 hours | ~1 hour |
-| Ingest output tokens | 746,865 (avg 2,745 / session) | 198,798 (avg 730 / session) |
-| Silent ingest gaps | 1 "No response from OpenClaw" | 60 (22% of sessions) |
-| Canary | enabled (30 records, ran after QA) | disabled |
+| sample  | A first-QA in | B first-QA in | C first-QA in |
+|---------|---|---|---|
+| conv-26 | (n/a, sequential) | **47,746** | 21,938 |
+| conv-43 | | **61,256** | 19,232 |
+| conv-47 | | **95,061** | 23,665 |
+| conv-49 | | **72,669** | 14,091 |
 
-These shift behavior but do not explain why B's surviving writes are categorically more structured.
+B's first QA for conv-47 cost 95K input tokens — that is the entire ingest thread sitting in working context. The model answered subsequent questions by scrolling back through the raw conversation log, bypassing memory retrieval entirely. C's first QA cost only ~14–24K (bootstrap + MEMORY.md + question) and stays bounded across the run.
 
-## Dominant driver: agent persona seeded by IDENTITY.md
+A had the writing-policy disadvantage but not the long-context advantage (its session reset behavior in the pre-flag harness still terminated within-sample threads). That is why A < B even though both share the same workspace-level contamination.
 
-A `~/.openclaw-eval/workspace-locomo-builtin-full/IDENTITY.md` (pre-filled from an earlier run that ran bootstrap once):
-```
-- **Name:** Echo
-- **Creature:** A curious digital assistant — part memory keeper, part helpful companion
-- **Vibe:** Warm, observant, thoughtful — remembers the little things
-- **Emoji:** 🧠
-```
+## Why C is the only trustworthy row
 
-B `~/.openclaw-eval/workspace-locomo-builtin-full-20260513-111321/IDENTITY.md` (fresh template):
-```
-- **Name:**
-  _(pick something you like)_
-- **Creature:**
-  _(AI? robot? familiar? ghost in the machine? something weirder?)_
-- **Vibe:**
-  _(how do you come across? sharp? warm? chaotic? calm?)_
-- **Emoji:**
-  _(your signature — pick one that feels right)_
-```
+C runs on `11ea451`, which lands two gates that are now both required:
 
-A's agent loaded a warm-observant-memory-keeper persona and wrote memory in that voice: chronological recap, soft inferences, emotional color, meta-notes like `### Updated MEMORY.md / - Added November 7, 2022 entry`. B's agent had no persona to inhabit and fell back to utilitarian note-taking: bullets, timestamps, entity-first, bolded proper nouns.
+1. **Per-sample agent wiring honored** (`d525884`, `OpenClawBackend.ingest/answer` forward the `agent` override). Each sample's writes land in its own `workspace-locomo-builtin-full-20260513-222431-conv-XX/`.
+2. **Session reset between QAs actually fires** (the reset is now keyed by the same per-sample agent the backend used). The QA agent cannot smuggle accumulated session content from question to question.
 
-Same model, different system context → different writing policy → different retrieval performance.
+Verification gates that C passes and A/B fail:
 
-## Independent confirmation
+| Gate | A | B | C |
+|---|---|---|---|
+| `memory_write_verification.invariant_rule` | n/a | "all" | "all" |
+| `memory_write_verification.invariant_held` | rubber-stamped (writes hit shared dir) | **false** (per-sample workspaces empty) | **true** |
+| Per-sample workspace populated | no | no | yes (all 10) |
+| Session reset between QAs | partial | broken (no-op) | working |
+| Cross-sample file overwrite possible | yes | yes | no |
 
-Codex (consult mode, `deepseek-v4-flash`'s 200-IQ adversarial counterpart) and a Claude `general-purpose` subagent reviewed the same six same-date file pairs in parallel without seeing each other's output. Both:
-- Picked B as the winner on retrieval quality.
-- Cited the same line-level evidence (timestamps, bullet structure, entity disambiguation).
-- Flagged A's process-noise meta-notes ("Updated MEMORY.md") and emotional inferences ("expert hiker now", "dream come true") as retrieval-hostile.
+C's score (63.54%) is what builtin memory delivers when the harness genuinely forces every answer through the memory subsystem. Categories 1, 2, and 4 are bounded by the lossy summarization in MEMORY.md writes (specific dates, counts, and proper nouns drop out); category 5 is unchanged across all three runs, which suggests multi-hop is bottlenecked by something other than write policy or isolation.
 
-Codex caught one additional finding I missed: **B's `2023-06-16.md` records the wrong sample's conversation** (Jon/Gina rather than the John/Maria conversation A captured). That is a cross-sample memory contamination consistent with the per-sample-agent wiring bug fixed on 2026-05-13 (see `lib/backends.py`): all 10 samples wrote into one base workspace, so a 2023-06-16 session from one sample overwrote another sample's same-date file.
+## Independent confirmation (historical, A vs B only)
 
-## What this means for the benchmark
+Codex (consult mode) and a Claude `general-purpose` subagent reviewed six same-date file pairs in parallel without seeing each other's output. Both picked B as the winner on retrieval quality, cited the same line-level evidence, and flagged A's process-noise meta-notes ("Updated MEMORY.md") and emotional inferences as retrieval-hostile.
 
-Neither A nor B is a valid LoCoMo per-sample-isolated row. Both share the same flawed wiring (all samples → one base workspace). The score *gap* between them is a measurement of the **writing-policy axis**, not the memory-system axis.
+Codex also caught: **B's `2023-06-16.md` records the wrong sample's conversation** (Jon/Gina rather than John/Maria) — cross-sample file overwrite, exactly the failure mode that the per-sample-agent fix exists to prevent. This is the artifact-level evidence that B's writes were not isolated, predating the token-level evidence above.
 
-For future runs:
-- Lock IDENTITY.md state before measuring. Either always-empty (fresh template) or always-populated (single canonical persona). Don't let workspace seed state drift between runs.
-- After the per-sample-agent fix lands, redo the full eval with isolated agents and an explicitly-chosen IDENTITY policy.
-- Treat MEMORY.md size as a regression signal: if it crosses ~100 KB per sample, the agent is journaling instead of indexing.
+## What this means going forward
+
+- **The benchmark row is C (63.54%).** Cite this number, not A and not B. A and B are kept on disk only as audit trail for this postmortem.
+- **The harness now enforces per-sample isolation as the only mode** (commit `da1a507`): the `--per-sample-agent` flag has been removed, isolation activates whenever `--agent-workspace` is set, and `memory_write_verification` uses the strict `"all"` rule. A future regression cannot silently re-create the A or B failure modes — `invariant_held` will go false and the run will be marked non-publishable.
+- **Productive next moves target the memory subsystem itself**, not the harness: categories 1/2/4 are where lossy summarization on the write side drops specific facts. Improving fidelity there is the path to raising 63.54%.
 
 ## Pointers
 
-- Harness fix: `lib/backends.py` `OpenClawBackend.ingest/answer` now honor `args.agent` override.
-- Run principles: `docs/full-eval-run-principles.md`.
+- Harness fixes: `lib/backends.py` (forward `agent` override, `d525884`); `main.py` (per-sample isolation is the only mode, `da1a507`).
+- Run principles: `.codex/skills/full-eval-run/references/full-eval-run-principles.md`.
 - A artifacts: `output/runs/builtin-memory-full-20260512-225733/oo-builtin/`.
-- B artifacts: `output/runs/builtin-memory-full-20260513-111321/oo-builtin/`.
+- B artifacts: `output/runs/builtin-memory-full-20260513-111321/oo-builtin/` (`memory_write_verification.json` shows `write_detected: false` for every sample — the loud invalidation signal).
+- C artifacts: `output/runs/builtin-memory-full-20260513-222431/oo-builtin/` (`memory_write_verification.invariant_held: true`, rule `"all"`, all 10 per-sample workspaces populated).
