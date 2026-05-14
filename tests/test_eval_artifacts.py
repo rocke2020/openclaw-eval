@@ -81,7 +81,6 @@ class EvalArtifactsTests(unittest.TestCase):
         ]
         args = argparse.Namespace(
             openclaw_home="/tmp/openclaw-eval",
-            per_sample_agent=False,
             agent_workspace="/tmp/workspace",
             agent="eval-locomo",
         )

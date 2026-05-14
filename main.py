@@ -9,7 +9,6 @@ Usage examples:
       --backends oo-builtin \\
       --builtin-agent eval-locomo-builtin-full \\
       --agent-workspace ~/.openclaw-eval/workspace-locomo-builtin-full \\
-      --per-sample-agent \\
       --include-categories 1,2,3,4,5 \\
       --judge-model deepseek-v4-flash \\
       --judge-base-url https://api.deepseek.com/v1 \\
@@ -437,10 +436,10 @@ def _write_run_manifest(args, samples: list[dict], backend_config: dict | None =
 
 
 def _resolve_sample_agent(args, sample_id: str) -> tuple[str, str | None]:
-    """Return (agent_id, workspace) for a sample, provisioning if per-sample mode is on."""
+    """Return (agent_id, workspace) for a sample. Per-sample isolation requires --agent-workspace."""
     agent_workspace = getattr(args, "agent_workspace", None)
-    if not getattr(args, "per_sample_agent", False) or not agent_workspace:
-        return args.agent, agent_workspace
+    if not agent_workspace:
+        return args.agent, None
 
     info = ensure_sample_agent(
         profile=getattr(args, "openclaw_profile", "eval"),
@@ -529,7 +528,7 @@ def run_ingest(args: argparse.Namespace) -> list[dict]:
     if args.input.endswith(".json"):
         samples = load_locomo_data(args.input, args.sample)
 
-        if getattr(args, "per_sample_agent", False) and getattr(args, "agent_workspace", None):
+        if getattr(args, "agent_workspace", None):
             sample_ids = [item["sample_id"] for item in samples]
             provision_sample_agents(
                 profile=getattr(args, "openclaw_profile", "eval"),
@@ -541,7 +540,7 @@ def run_ingest(args: argparse.Namespace) -> list[dict]:
         backend_config = args.backend.manifest_config() if getattr(args, "backend", None) else None
         _write_run_manifest(args, samples, backend_config)
 
-        parallel = getattr(args, "ingest_parallel", 4) if getattr(args, "per_sample_agent", False) else 1
+        parallel = getattr(args, "ingest_parallel", 4) if getattr(args, "agent_workspace", None) else 1
 
         def _ingest_one_sample_safe(item):
             try:
@@ -602,22 +601,19 @@ def run_ingest(args: argparse.Namespace) -> list[dict]:
             write_jsonl(run_dir / "ingest.jsonl", results)
             write_json(run_dir / "ingest_summary.json", summary)
             if args.agent_workspace:
-                per_sample = bool(getattr(args, "per_sample_agent", False))
                 detections = [bool(v.get("write_detected")) for v in verification]
-                invariant_held = (
-                    all(detections) if per_sample else any(detections)
-                ) if detections else False
+                invariant_held = all(detections) if detections else False
                 memory_payload = {
                     "status": "ok",
                     "invariant_held": invariant_held,
-                    "invariant_rule": "all" if per_sample else "any",
+                    "invariant_rule": "all",
                     "samples": verification,
                 }
             else:
                 memory_payload = {
                     "status": "not_configured",
                     "invariant_held": False,
-                    "invariant_rule": "any",
+                    "invariant_rule": "all",
                     "samples": [],
                 }
             write_json(run_dir / "memory_write_verification.json", memory_payload)
@@ -1054,23 +1050,18 @@ def _collect_one_backend(args: argparse.Namespace, backend_id: str, group_dir: P
         verification = json.loads(verification_path.read_text(encoding="utf-8"))
         samples = verification.get("samples", [])
         detected = [bool(s.get("write_detected")) for s in samples]
-        per_sample = bool(getattr(run_args, "per_sample_agent", False))
         if not samples:
             memory_verified_detail = "no samples verified (workspace not configured)"
-        elif per_sample:
+        else:
             memory_verified = all(detected)
             if not memory_verified:
                 missing = [
                     s.get("sample_id", "?") for s, d in zip(samples, detected) if not d
                 ]
                 memory_verified_detail = (
-                    f"per-sample mode requires writes for all samples; "
+                    f"per-sample isolation requires writes for all samples; "
                     f"{len(missing)}/{len(samples)} missing: {','.join(missing)}"
                 )
-        else:
-            memory_verified = any(detected)
-            if not memory_verified:
-                memory_verified_detail = "no sample showed a memory write"
 
     reasons: list[str] = []
     if run_args.agent == "main":
@@ -1247,7 +1238,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--count", type=int, default=None, help="QA question limit")
     parser.add_argument("--user", default=None, help="Override OpenClaw user key")
     parser.add_argument("-p", "--qa-parallel", type=int, default=5, metavar="N", help="QA samples in flight")
-    parser.add_argument("--ingest-parallel", type=int, default=4, metavar="N", help="Ingest samples in flight (requires --per-sample-agent)")
+    parser.add_argument("--ingest-parallel", type=int, default=4, metavar="N", help="Ingest samples in flight (requires --agent-workspace)")
     parser.add_argument("--run-dir", default=None, help="Directory for reproducible eval artifacts")
     parser.add_argument("--agent-workspace", default=None, help="Eval agent workspace path for memory write checks")
     parser.add_argument("--include-categories", default=None, help="Comma-delimited QA categories to include")
@@ -1260,10 +1251,6 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--judge-base-url", default=None, help="Judge base URL recorded in manifest")
     parser.add_argument("--canary", action="store_true", default=False, help="Run cross-sample contamination canaries")
     parser.add_argument("--canary-count", type=int, default=3, help="Canary questions per sample pair")
-    parser.add_argument(
-        "--per-sample-agent", action="store_true", default=False,
-        help="Provision a separate agent+workspace per sample for full memory isolation",
-    )
     parser.add_argument(
         "--skip-strict-isolation-check", action="store_true", default=False,
         help="Skip eval-profile tool/skill isolation gate",

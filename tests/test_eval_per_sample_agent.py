@@ -58,7 +58,6 @@ def _base_args(**overrides) -> argparse.Namespace:
         openclaw_home=None,
         openclaw_profile="eval",
         agent_workspace="/tmp/test-ws-does-not-exist",
-        per_sample_agent=True,
         ingest_parallel=1,
         backend=backend,
         include_categories=None,

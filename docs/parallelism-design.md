@@ -14,9 +14,9 @@ The eval harness parallelizes across three pipeline stages with independent conc
 
 ## Safety Invariants
 
-### Ingest parallelism requires `--per-sample-agent`
+### Per-sample isolation is mandatory
 
-Each sample gets its own OpenClaw agent + workspace + SQLite memory database. Without per-sample isolation, all samples write to a shared workspace — parallel writes would corrupt memory state. The harness enforces sequential ingest when `--per-sample-agent` is not set.
+Each sample gets its own OpenClaw agent + workspace + SQLite memory database. The harness always provisions per-sample agents when `--agent-workspace` is set, so parallel ingest is safe. Without `--agent-workspace` (smoke runs only), the harness falls back to the base agent and forces sequential ingest.
 
 ### QA parallelism is inter-sample only
 
@@ -43,7 +43,7 @@ The OpenClaw gateway enforces `maxConcurrent: 4` for agent requests. This means:
 ```
 main.py eval
 │
-├── Ingest (--ingest-parallel 4, requires --per-sample-agent)
+├── Ingest (--ingest-parallel 4, requires --agent-workspace)
 │   ├── sample-A ──[session_1 → session_2 → ... → session_N]──→ workspace-A/
 │   ├── sample-B ──[session_1 → session_2 → ... → session_N]──→ workspace-B/
 │   ├── sample-C ──[sequential within, parallel across]─────────→ workspace-C/
