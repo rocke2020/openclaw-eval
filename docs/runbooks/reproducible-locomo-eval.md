@@ -12,7 +12,7 @@ openclaw --profile eval gateway
 Run ingest and QA against that gateway:
 
 ```bash
-uv run python eval.py ingest ./locomo10.json \
+uv run eval.py ingest ./locomo10.json \
   --base-url http://127.0.0.1:19002 \
   --agent eval-locomo \
   --openclaw-profile eval \
@@ -20,7 +20,7 @@ uv run python eval.py ingest ./locomo10.json \
   --agent-workspace ~/.openclaw-eval/workspace-locomo-eval \
   --tail "[remember what's said, keep existing memory]"
 
-uv run python eval.py qa ./locomo10.json \
+uv run eval.py qa ./locomo10.json \
   --base-url http://127.0.0.1:19002 \
   --agent eval-locomo \
   --openclaw-profile eval \
@@ -37,7 +37,7 @@ Strict mode includes categories `1,2,3,4,5` by default. Any exclusion must be pa
 Comparison run:
 
 ```bash
-uv run python eval.py compare ./locomo10.json \
+uv run eval.py compare ./locomo10.json \
   --run-group output/runs/locomo-memory-comparison-001 \
   --backends oo-builtin,oo-qmd,openviking \
   --include-categories 1,2,3,4,5 \

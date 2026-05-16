@@ -184,13 +184,13 @@ output/runs/<group_id>/
 Keep the two primary commands, but make strict mode explicit.
 
 ```bash
-uv run python eval.py ingest ./locomo10.json \
+uv run eval.py ingest ./locomo10.json \
   --agent eval-locomo \
   --run-dir output/runs/locomo-eval-001 \
   --agent-workspace ~/.openclaw-eval/workspace-locomo-eval \
   --tail "[remember what's said, keep existing memory]"
 
-uv run python eval.py qa ./locomo10.json \
+uv run eval.py qa ./locomo10.json \
   --agent eval-locomo \
   --run-dir output/runs/locomo-eval-001 \
   --include-categories 1,2,3,4,5
@@ -207,7 +207,7 @@ mkdir -p ~/.openclaw-eval
 openclaw --profile eval config set gateway.port 19002 --strict-json
 openclaw --profile eval gateway
 
-uv run python eval.py ingest ./locomo10.json \
+uv run eval.py ingest ./locomo10.json \
   --base-url http://127.0.0.1:19002 \
   --agent eval-locomo \
   --openclaw-profile eval \
@@ -218,7 +218,7 @@ uv run python eval.py ingest ./locomo10.json \
 For the three-backend comparison:
 
 ```bash
-uv run python eval.py compare ./locomo10.json \
+uv run eval.py compare ./locomo10.json \
   --run-group output/runs/locomo-memory-comparison-001 \
   --backends oo-builtin,oo-qmd,openviking \
   --include-categories 1,2,3,4,5 \
@@ -564,7 +564,7 @@ The harness cannot fully prove OpenClaw's in-process backend from the Responses 
 Add:
 
 ```bash
-uv run python eval.py compare ./locomo10.json --run-group output/runs/<group> --backends oo-builtin,oo-qmd,openviking
+uv run eval.py compare ./locomo10.json --run-group output/runs/<group> --backends oo-builtin,oo-qmd,openviking
 ```
 
 The command should create one strict run directory per backend and then render group-level summary/report artifacts.
@@ -1232,7 +1232,7 @@ git commit -m "feat: compare openclaw and openviking memory backends"
 
 **Files:**
 - Modify: `README.md`
-- Create: `docs/reproducible-locomo-eval.md`
+- Create: `docs/runbooks/reproducible-locomo-eval.md`
 
 - [x] **Step 1: Document strict publishable run**
 
@@ -1243,8 +1243,8 @@ uv sync
 mkdir -p ~/.openclaw-eval
 openclaw --profile eval config set gateway.port 19002 --strict-json
 openclaw --profile eval gateway
-uv run python eval.py ingest ./locomo10.json --base-url http://127.0.0.1:19002 --agent eval-locomo --openclaw-profile eval --run-dir output/runs/dev-smoke --sample 0 --sessions 1-4 --agent-workspace ~/.openclaw-eval/workspace-locomo-eval
-uv run python eval.py qa ./locomo10.json --base-url http://127.0.0.1:19002 --agent eval-locomo --openclaw-profile eval --run-dir output/runs/dev-smoke --sample 0 --include-categories 1,2,3,4,5
+uv run eval.py ingest ./locomo10.json --base-url http://127.0.0.1:19002 --agent eval-locomo --openclaw-profile eval --run-dir output/runs/dev-smoke --sample 0 --sessions 1-4 --agent-workspace ~/.openclaw-eval/workspace-locomo-eval
+uv run eval.py qa ./locomo10.json --base-url http://127.0.0.1:19002 --agent eval-locomo --openclaw-profile eval --run-dir output/runs/dev-smoke --sample 0 --include-categories 1,2,3,4,5
 uv run python judge.py output/runs/dev-smoke/answers.json --output output/runs/dev-smoke/judge_grades.json
 ```
 
@@ -1265,7 +1265,7 @@ and the matching `--base-url`.
 Add:
 
 ```bash
-uv run python eval.py compare ./locomo10.json \
+uv run eval.py compare ./locomo10.json \
   --run-group output/runs/locomo-memory-comparison-001 \
   --backends oo-builtin,oo-qmd,openviking \
   --include-categories 1,2,3,4,5
@@ -1294,7 +1294,7 @@ A run is not publishable if:
 Run:
 
 ```bash
-rg -n "eval-locomo|memory_write_verification|include-categories|openclaw --profile eval|oo-builtin|oo-qmd|openviking" README.md docs/reproducible-locomo-eval.md
+rg -n "eval-locomo|memory_write_verification|include-categories|openclaw --profile eval|oo-builtin|oo-qmd|openviking" README.md docs/runbooks/reproducible-locomo-eval.md
 ```
 
 Expected: all key terms are present.
@@ -1302,7 +1302,7 @@ Expected: all key terms are present.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add README.md docs/reproducible-locomo-eval.md
+git add README.md docs/runbooks/reproducible-locomo-eval.md
 git commit -m "docs: add reproducible locomo eval runbook"
 ```
 
@@ -1338,12 +1338,12 @@ answers.json
 Run against `locomo10_small.json`:
 
 ```bash
-uv run python eval.py ingest ./locomo10_small.json \
+uv run eval.py ingest ./locomo10_small.json \
   --agent eval-locomo \
   --run-dir output/runs/manual-small \
   --agent-workspace ~/.openclaw-eval/workspace-locomo-eval
 
-uv run python eval.py qa ./locomo10_small.json \
+uv run eval.py qa ./locomo10_small.json \
   --agent eval-locomo \
   --run-dir output/runs/manual-small \
   --count 3 \

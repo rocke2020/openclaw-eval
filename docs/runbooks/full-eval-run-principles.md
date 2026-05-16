@@ -158,7 +158,7 @@ Builtin full-run command shape:
 ```bash
 RUN_GROUP="output/runs/builtin-memory-full-$(date +%Y%m%d-%H%M%S)"
 
-OPENCLAW_GATEWAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN" PYTHONPATH=. uv run python eval.py compare locomo10.json \
+OPENCLAW_GATEWAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN" PYTHONPATH=. uv run eval.py compare locomo10.json \
   --run-group "$RUN_GROUP" \
   --backends oo-builtin \
   --builtin-agent eval-locomo-builtin-full \

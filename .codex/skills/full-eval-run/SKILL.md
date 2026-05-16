@@ -1,6 +1,6 @@
 ---
 name: full-eval-run
-description: Prepare, run, judge, and verify final OpenClaw LoCoMo benchmark runs without contaminating memory state or reporting untraceable metrics. Use when asked to run a full eval, final benchmark row, LoCoMo comparison table, builtin-memory eval, judge an eval run, verify eval artifacts, or turn docs/full-eval-run-principles.md into operational execution steps.
+description: Prepare, run, judge, and verify final OpenClaw LoCoMo benchmark runs without contaminating memory state or reporting untraceable metrics. Use when asked to run a full eval, final benchmark row, LoCoMo comparison table, builtin-memory eval, judge an eval run, verify eval artifacts, or turn docs/runbooks/full-eval-run-principles.md into operational execution steps.
 ---
 
 # Full Eval Run
