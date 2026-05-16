@@ -229,7 +229,7 @@ class EvalArtifactsTests(unittest.TestCase):
 
     def test_verify_strict_eval_isolation_requires_memory_only_tools(self):
         responses = {
-            ("eval", "config", "get", "tools.allow", "--json"): ["memory_search", "memory_get"],
+            ("eval", "config", "get", "tools.allow", "--json"): ["memory_search", "memory_get", "write", "edit"],
             ("eval", "config", "get", "tools.deny", "--json"): sorted(main_module.STRICT_FORBIDDEN_TOOLS),
             ("eval", "config", "get", "tools.elevated.enabled", "--json"): False,
             ("eval", "skills", "check", "--agent", "eval-locomo", "--json"): {
@@ -245,11 +245,11 @@ class EvalArtifactsTests(unittest.TestCase):
             report = verify_strict_eval_isolation("eval", "eval-locomo")
 
         self.assertTrue(report["ok"])
-        self.assertEqual(report["tools_allow"], ["memory_get", "memory_search"])
+        self.assertEqual(report["tools_allow"], ["edit", "memory_get", "memory_search", "write"])
 
     def test_verify_strict_eval_isolation_fails_when_exec_allowed(self):
         responses = {
-            ("eval", "config", "get", "tools.allow", "--json"): ["memory_search", "memory_get", "exec"],
+            ("eval", "config", "get", "tools.allow", "--json"): ["memory_search", "memory_get", "write", "edit", "exec"],
             ("eval", "config", "get", "tools.deny", "--json"): sorted(main_module.STRICT_FORBIDDEN_TOOLS - {"exec"}),
             ("eval", "config", "get", "tools.elevated.enabled", "--json"): False,
             ("eval", "skills", "check", "--agent", "eval-locomo", "--json"): {

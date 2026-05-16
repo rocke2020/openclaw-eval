@@ -81,9 +81,14 @@ Verify:
 
 ```bash
 openclaw --profile eval skills check --agent <agent-id> --json
+openclaw --profile eval config get tools.allow --json
+openclaw --profile eval config get tools.deny --json
 ```
 
 `modelVisible` and `commandVisible` must both be empty. `eligible` may still list installed skills whose requirements are present; that is acceptable only when those skills appear under `agentFiltered` and are not model-visible or command-visible.
+
+The eval profile must expose the minimal durable-memory tool surface:
+`memory_search`, `memory_get`, `write`, and `edit`. OpenClaw 2026.5.7 writes builtin memory through the normal file write/edit tools under the isolated agent workspace; if `write` and `edit` are denied, ingest can only read/search memory and `memory_write_verification` will fail for every sample. Keep broad read/exec/process/session/browser/network tools denied.
 
 ## Gateway And Backend
 

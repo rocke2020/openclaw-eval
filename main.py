@@ -80,13 +80,11 @@ from lib.openclaw import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-STRICT_MEMORY_TOOLS = {"memory_search", "memory_get"}
+STRICT_MEMORY_TOOLS = {"memory_search", "memory_get", "write", "edit"}
 STRICT_FORBIDDEN_TOOLS = {
     "exec",
     "process",
     "read",
-    "write",
-    "edit",
     "apply_patch",
     "image",
     "sessions_list",

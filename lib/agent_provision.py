@@ -75,6 +75,7 @@ def _ensure_one_agent(
     workspace = sample_workspace(base_workspace, sample_id)
 
     if _agent_exists(profile, agent_id):
+        _remove_bootstrap_template(workspace)
         if _workspace_has_memory(workspace):
             print(
                 f"    [provision] WARNING: agent {agent_id} already has memory at {workspace}",
@@ -94,6 +95,7 @@ def _ensure_one_agent(
         raise RuntimeError(
             f"Failed to provision agent {agent_id}: {result.stderr.strip()}"
         )
+    _remove_bootstrap_template(workspace)
     print(f"    [provision] created agent {agent_id} -> {workspace}", file=sys.stderr)
     return {"agent_id": agent_id, "workspace": workspace, "_created": True}
 
@@ -120,3 +122,12 @@ def _workspace_has_memory(workspace: str) -> bool:
     if memory_dir.exists() and any(memory_dir.glob("*.md")):
         return True
     return False
+
+
+def _remove_bootstrap_template(workspace: str) -> None:
+    """Remove OpenClaw's first-run chat template from benchmark workspaces."""
+    bootstrap = Path(workspace) / "BOOTSTRAP.md"
+    try:
+        bootstrap.unlink()
+    except FileNotFoundError:
+        return
