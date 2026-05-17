@@ -16,18 +16,22 @@ Read [references/full-eval-run-principles.md](references/full-eval-run-principle
 ## Workflow
 
 1. Declare the dataset scope before running anything. Distinguish smoke, sampled, and full `locomo10.json` runs.
-2. Verify the repo is clean with `git status --short`; final rows require no output and `eval_repo_dirty=false`.
-3. Use per-sample isolation for every publishable OpenClaw run. Pass a base eval agent plus `--agent-workspace`; the harness provisions `<base-agent>-<sample_id>` and `<base-workspace>-<sample_id>` automatically. Do not delete prior memory or session state to create freshness.
-4. Disable and verify skill visibility for the base eval agent and the effective per-sample agents. `modelVisible` and `commandVisible` must be empty.
-5. Verify eval-profile gateway, backend, model, memory, and auth settings before ingest.
-6. Run ingest and QA into a new `output/runs/<run-group>/<backend-id>/` directory, with `--agent-workspace` configured. Enable canaries for multi-sample final runs unless intentionally recorded as skipped.
-7. Run the judge against `answers.json` and verify judge totals match answer totals.
-8. Accept and report only artifact-backed values from `manifest.json`, summaries, `memory_write_verification.json`, `answers.json`, and `judge_grades.json`.
+2. Run a sample smoke eval first for the exact backend/profile/agent pattern you intend to use. Use `locomo10.json --sample <n>` or a tiny `locomo10_small.json` scope, still with `--agent-workspace`, and verify artifacts before any full eval.
+3. Only after the smoke passes, run the full eval on all of `locomo10.json`. Never jump directly from config edits to a full final row.
+4. Verify the repo is clean with `git status --short`; final rows require no output and `eval_repo_dirty=false`.
+5. Use per-sample isolation for every publishable OpenClaw run. Pass a base eval agent plus `--agent-workspace`; the harness provisions `<base-agent>-<sample_id>` and `<base-workspace>-<sample_id>` automatically. Do not delete prior memory or session state to create freshness.
+6. Disable and verify skill visibility for the base eval agent and the effective per-sample agents. `modelVisible` and `commandVisible` must be empty.
+7. Verify eval-profile gateway, backend, model, memory, and auth settings before ingest.
+8. Run ingest and QA into a new `output/runs/<run-group>/<backend-id>/` directory, with `--agent-workspace` configured. Enable canaries for multi-sample final runs unless intentionally recorded as skipped.
+9. Run the judge against `answers.json` and verify judge totals match answer totals.
+10. Accept and report only artifact-backed values from `manifest.json`, summaries, `memory_write_verification.json`, `answers.json`, and `judge_grades.json`.
 
 ## Hard Rules
 
 - Never imply a sampled run represents all LoCoMo10.
+- Never run a full `locomo10.json` final row until a sample smoke run has passed for the same backend/profile/agent/workspace pattern.
 - Never run a publishable OpenClaw final row without per-sample isolation via `--agent-workspace`.
+- Never remove `write` or `edit` from the eval profile's durable-memory tool surface. `tools.allow` must be exactly `memory_search`, `memory_get`, `write`, and `edit`; builtin memory persists through file `write`/`edit`.
 - Never pass `--user` for primary multi-sample runs.
 - Never use `--allow-non-publishable` for final rows.
 - Never report scores from `comparison_summary.json` or `comparison_report.html` unless regenerated after judging.
@@ -38,7 +42,9 @@ Read [references/full-eval-run-principles.md](references/full-eval-run-principle
 
 Before saying a full eval result is valid, confirm:
 
+- a prior sample smoke run passed for the same backend/profile/agent/workspace pattern
 - `eval_repo_dirty=false`
+- `tools.allow` is exactly `["edit", "memory_get", "memory_search", "write"]` after sorting
 - `openclaw_agent` and `backend_config.agent` match the intended base agent for the backend
 - `memory_write_verification` is `configured`
 - every selected sample has a per-sample verification entry with `write_detected=true`

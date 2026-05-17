@@ -48,4 +48,6 @@ Never delete database or vector-store data from code, tests, or scripts unless e
 
 For strict memory evaluation, the eval profile should expose no agent skills. Verify with `openclaw --profile eval skills check --agent eval-locomo --json`; `modelVisible` and `commandVisible` should be empty. The profile uses `agents.defaults.skills=[]`; restart the eval gateway after changing it.
 
+Do not over-harden the eval profile by removing memory write tools. Publishable OpenClaw builtin-memory and builtin-vector rows require `tools.allow` to be exactly `memory_search`, `memory_get`, `write`, and `edit`. Prior builtin-memory evals showed OpenClaw persists durable memory through normal file `write`/`edit` operations under the isolated agent workspace; if `write` or `edit` is denied, ingest can only read/search memory and `memory_write_verification` will fail for every selected sample.
+
 Publishable OpenClaw eval rows must use per-sample isolation. Pass a base agent plus `--agent-workspace`; the harness provisions `<base-agent>-<sample_id>` and `<base-workspace>-<sample_id>`. A final row is invalid if `memory_write_verification` is not configured or any selected sample lacks `write_detected=true`.

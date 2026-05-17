@@ -271,13 +271,24 @@ class EvalArtifactsTests(unittest.TestCase):
     def test_eval_isolation_gate_checks_backend_agents(self):
         args = argparse.Namespace(
             mode="eval",
-            backends="oo-builtin,openviking",
+            backends="oo-builtin,oo-builtin-vector,openviking",
             agent="default-agent",
             builtin_agent="builtin-agent",
+            builtin_vector_agent="builtin-vector-agent",
             qmd_agent="qmd-agent",
         )
 
-        self.assertEqual(main_module.strict_isolation_agents_for_args(args), ["builtin-agent"])
+        self.assertEqual(
+            main_module.strict_isolation_agents_for_args(args),
+            ["builtin-agent", "builtin-vector-agent"],
+        )
+
+    def test_eval_default_backends_include_builtin_vector_not_qmd(self):
+        self.assertEqual(
+            main_module.DEFAULT_EVAL_BACKENDS,
+            "oo-builtin,oo-builtin-vector,openviking",
+        )
+        self.assertNotIn("oo-qmd", main_module.DEFAULT_EVAL_BACKENDS)
 
     def test_run_qa_writes_strict_artifacts_with_mocked_backend(self):
         sample = {

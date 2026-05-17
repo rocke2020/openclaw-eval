@@ -150,10 +150,34 @@ env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u http
 2. Create or select a fresh base agent/workspace for the backend; per-sample agents/workspaces are derived from that base.
 3. Verify skills are not visible to the base eval agent and any effective per-sample agents used by the run.
 4. Restart the eval gateway after config changes.
-5. Run ingest and QA into a new `output/runs/<run-group>/<backend-id>/` directory.
-6. For multi-sample final runs, either enable contamination canaries with `--canary` or record that canaries were intentionally skipped.
-7. Run the judge against `answers.json`.
-8. Report only metrics traceable to artifacts.
+5. Run a sample smoke eval into a new `output/runs/<run-group>-smoke/<backend-id>/` directory using the same backend/profile/base-agent/base-workspace pattern intended for the full run. Use `locomo10.json --sample <n>` or a tiny `locomo10_small.json` scope, but keep `--agent-workspace` enabled so memory-write verification is exercised.
+6. Verify the smoke artifacts before continuing: `manifest.json`, `memory_write_verification.json`, `answers.json`, and `judge_grades.json` if judged. The smoke must show `memory_write_verification=configured` and every selected sample must have `write_detected=true`.
+7. Only after the smoke passes, run ingest and QA for the full scope into a new `output/runs/<run-group>/<backend-id>/` directory.
+8. For multi-sample final runs, either enable contamination canaries with `--canary` or record that canaries were intentionally skipped.
+9. Run the judge against `answers.json`.
+10. Report only metrics traceable to artifacts.
+
+Builtin smoke command shape:
+
+```bash
+SMOKE_GROUP="output/runs/builtin-memory-smoke-$(date +%Y%m%d-%H%M%S)"
+
+OPENCLAW_GATEWAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN" PYTHONPATH=. uv run python main.py eval locomo10.json \
+  --run-group "$SMOKE_GROUP" \
+  --backends oo-builtin \
+  --builtin-agent eval-locomo-builtin-smoke \
+  --base-url http://127.0.0.1:19002 \
+  --openclaw-home ~/.openclaw-eval \
+  --openclaw-profile eval \
+  --agent-workspace ~/.openclaw-eval/workspace-locomo-builtin-smoke \
+  --sample 0 \
+  --sessions 1-4 \
+  --include-categories 1,2,3,4,5 \
+  --judge-model deepseek-v4-flash \
+  --judge-base-url https://api.deepseek.com/v1
+```
+
+Do not reuse the smoke agent/workspace for the full row. The smoke validates the pipeline; the full row should get fresh final-run names.
 
 Builtin full-run command shape:
 
@@ -182,7 +206,7 @@ env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u http
   --parallel 4
 ```
 
-Use a sampled scope first when validating pipeline changes; use all of `locomo10.json` only for final rows.
+Use a sampled smoke scope first when validating pipeline changes; use all of `locomo10.json` only after that smoke passes.
 
 Easy-to-confuse flags:
 
@@ -207,7 +231,9 @@ jq '.results | length' "$RUN_GROUP/oo-builtin/answers.json"
 
 Accept the run only if:
 
+- a prior sample smoke run passed for the same backend/profile/base-agent/base-workspace pattern
 - `eval_repo_dirty=false`
+- `tools.allow` sorted equals `["edit", "memory_get", "memory_search", "write"]`
 - `openclaw_agent` and `backend_config.agent` match the intended backend base agent
 - `memory_write_verification` is `configured`
 - every selected sample has a per-sample verification entry with `write_detected=true`

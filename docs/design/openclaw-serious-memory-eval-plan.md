@@ -2,11 +2,23 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Turn this repo into a publishable, stricter, reproducible memory benchmark harness for LoCoMo-style "memory write + retrieval + answer" evaluation, with OpenClaw built-in memory as the baseline and comparable QMD/OpenViking runs.
+**Goal:** Turn this repo into a publishable, stricter, reproducible memory benchmark harness for LoCoMo-style "memory write + retrieval + answer" evaluation, with OpenClaw built-in memory as the baseline and comparable builtin-vector/OpenViking runs.
 
-**Architecture:** Keep the existing LoCoMo ingest and QA shape, but make every hidden assumption explicit: target backend, target agent, user key, dataset fingerprint, category filter, memory write verification, run manifest, and scoring output. The harness should support a dedicated OpenClaw profile/gateway for publishable OpenClaw runs and an OpenViking adapter that can be scored under the same artifact contract.
+**Architecture:** Keep the existing LoCoMo ingest and QA shape, but make every hidden assumption explicit: target backend, target agent, user key, dataset fingerprint, category filter, memory write verification, run manifest, and scoring output. The harness should support a dedicated OpenClaw profile/gateway for publishable OpenClaw runs and an OpenViking adapter that can be scored under the same artifact contract. QMD is no longer a primary comparison target.
 
 **Tech Stack:** Python 3.13, `unittest`, OpenClaw `/v1/responses`, OpenViking CLI, LoCoMo JSON, JSONL/JSON artifacts, optional HTML report.
+
+## Current Reality: 2026-05-17
+
+This plan is being updated after the first strict builtin-memory runs and the QMD stop decision.
+
+- `oo-qmd` is stopped. The code still contains a registry entry and CLI flag for it, but QMD should not be used for new primary LoCoMo rows. See `docs/eval-journal/2026-05-16-stop-qmd-memory-eval.md`.
+- The replacement OpenClaw comparison row is `oo-builtin-vector` (the intended spelling for "OpenClaw builtin vector"; if older notes say `oo-builin-vector`, treat that as a typo unless code deliberately chooses that id).
+- `oo-builtin-vector` should preserve builtin memory's durable markdown write contract (`MEMORY.md` / `memory/*.md`) and add semantic vector retrieval over that same durable memory state.
+- The vector retrieval row uses local Ollama with Qwen3 0.6B embedding. Verified default `~/.openclaw/openclaw.json` currently has `agents.defaults.memorySearch.provider="ollama"`, `remote.baseUrl="http://127.0.0.1:11434"`, `model="qwen3-embedding:0.6b"`, vector store enabled, and hybrid query enabled with `vectorWeight=0.8`, `textWeight=0.2`, `candidateMultiplier=6`.
+- The local Ollama service at `127.0.0.1:11434` currently advertises `qwen3-embedding:0.6b` with family `qwen3`, parameter size `595.78M`, and quantization `Q8_0`.
+- The embedding model and vector index config must be recorded in `manifest.json.backend_config`.
+- The current repo code registers `oo-builtin`, `oo-qmd`, and `openviking` in `lib/backends.py`; it does not yet register `oo-builtin-vector`. The implementation work is therefore to stop advertising QMD in docs/default comparison commands and add the builtin-vector backend path.
 
 ---
 
@@ -55,16 +67,16 @@ For the cross-backend benchmark, keep the same semantic definition:
 memory write + retrieval + answer
 ```
 
-OpenClaw built-in and OpenClaw QMD should use the normal OpenClaw agent path for both ingest and QA. OpenViking must not be compared using ingest-only `ov add-memory`; it needs an answering path too. If OpenViking does not expose a stable chat/answer API, the reproducible adapter should use `ov search` for retrieval and a fixed answer model/prompt for final answers, and the manifest must mark that mode as `openviking-search-rag`.
+OpenClaw built-in and OpenClaw builtin-vector should use the normal OpenClaw agent path for both ingest and QA. OpenViking must not be compared using ingest-only `ov add-memory`; it needs an answering path too. If OpenViking does not expose a stable chat/answer API, the reproducible adapter should use `ov search` for retrieval and a fixed answer model/prompt for final answers, and the manifest must mark that mode as `openviking-search-rag`.
 
 ## Backend Matrix
 
-The primary comparison should run all three backends under one run group:
+The primary comparison should run the active backends under one run group:
 
 ```text
 output/runs/<group_id>/
   oo-builtin/
-  oo-qmd/
+  oo-builtin-vector/
   openviking/
   comparison_report.html
   comparison_summary.json
@@ -73,15 +85,23 @@ output/runs/<group_id>/
 | Backend id | Purpose | Ingest path | QA path | Isolation |
 |------------|---------|-------------|---------|-----------|
 | `oo-builtin` | Baseline | OpenClaw `/v1/responses` with built-in memory backend | OpenClaw `/v1/responses` | dedicated `eval-locomo-builtin` agent/profile |
-| `oo-qmd` | OpenClaw QMD memory comparison | OpenClaw `/v1/responses` with `memory.backend: "qmd"` | OpenClaw `/v1/responses` | dedicated `eval-locomo-qmd` agent/profile |
+| `oo-builtin-vector` | OpenClaw builtin memory plus semantic vector retrieval | OpenClaw `/v1/responses` with durable builtin memory write path and vector retrieval enabled | OpenClaw `/v1/responses` | dedicated `eval-locomo-builtin-vector` agent/profile/workspace |
 | `openviking` | External memory comparison | `ov add-memory` through an adapter | `ov search` plus fixed answer prompt, or stable OpenViking chat if available | dedicated OpenViking account/user/agent id |
+
+Stopped backend:
+
+| Backend id | Status | Reason |
+|------------|--------|--------|
+| `oo-qmd` | stopped for primary evals | QMD does not yet have a first-class scoped write contract equivalent to builtin durable markdown memory, so the row is hard to defend as "same agent, different memory backend." Reopen only as an explicit ablation or after QMD can prove no hidden transcript indexing, extra paths, or non-equivalent write path. |
 
 Fairness rules:
 
 - Use the same dataset file, sample set, session range, message formatter, category policy, and judge for every backend.
 - Use the same final answer model where the backend design allows it. If one backend controls its answer model internally, record that explicitly in `manifest.json`.
 - Keep OpenClaw built-in memory as the baseline row in every comparison report.
-- Keep QMD baseline mode conservative: disable QMD session transcript indexing and extra paths unless the run is explicitly an ablation. Otherwise QMD may receive extra context that built-in memory does not receive.
+- Keep builtin-vector conservative: it must use the same durable memory write path as `oo-builtin`; only retrieval may add semantic vector search over those files.
+- The eval profile must allow `memory_search`, `memory_get`, `write`, and `edit`. Prior builtin-memory runs showed that OpenClaw writes durable builtin memory through normal file `write`/`edit` tools under the isolated agent workspace; if `write` and `edit` are denied, ingest can only read/search memory and `memory_write_verification` fails for every selected sample.
+- For `oo-builtin-vector`, record the embedding provider/model, vector dimension, indexed source paths, index root, and whether lexical retrieval is also enabled. The intended embedding config is the verified local Ollama setup: provider `ollama`, base URL `http://127.0.0.1:11434`, model `qwen3-embedding:0.6b`, vector store enabled, hybrid retrieval enabled.
 - Do not mix backend runs in the same OpenClaw agent, OpenViking user, workspace, or memory directory.
 - Report backend setup separately from score, because a higher score with a non-equivalent setup is not a clean memory-backend comparison.
 
@@ -164,7 +184,7 @@ output/runs/<group_id>/
 - `judge_model`
 - `judge_base_url`
 
-`answers.json` must be the stable input for `judge.py`.
+`answers.json` must be the stable input for `main.py judge`.
 
 `comparison_summary.json` must include per-backend:
 
@@ -184,18 +204,18 @@ output/runs/<group_id>/
 Keep the two primary commands, but make strict mode explicit.
 
 ```bash
-uv run eval.py ingest ./locomo10.json \
+uv run python main.py ingest ./locomo10.json \
   --agent eval-locomo \
   --run-dir output/runs/locomo-eval-001 \
   --agent-workspace ~/.openclaw-eval/workspace-locomo-eval \
   --tail "[remember what's said, keep existing memory]"
 
-uv run eval.py qa ./locomo10.json \
+uv run python main.py qa ./locomo10.json \
   --agent eval-locomo \
   --run-dir output/runs/locomo-eval-001 \
   --include-categories 1,2,3,4,5
 
-uv run python judge.py output/runs/locomo-eval-001/answers.json \
+uv run python main.py judge output/runs/locomo-eval-001/answers.json \
   --output output/runs/locomo-eval-001/judge_grades.json \
   --model gpt-4o-mini
 ```
@@ -207,7 +227,7 @@ mkdir -p ~/.openclaw-eval
 openclaw --profile eval config set gateway.port 19002 --strict-json
 openclaw --profile eval gateway
 
-uv run eval.py ingest ./locomo10.json \
+uv run python main.py ingest ./locomo10.json \
   --base-url http://127.0.0.1:19002 \
   --agent eval-locomo \
   --openclaw-profile eval \
@@ -218,34 +238,34 @@ uv run eval.py ingest ./locomo10.json \
 For the three-backend comparison:
 
 ```bash
-uv run eval.py compare ./locomo10.json \
+uv run python main.py eval ./locomo10.json \
   --run-group output/runs/locomo-memory-comparison-001 \
-  --backends oo-builtin,oo-qmd,openviking \
+  --backends oo-builtin,oo-builtin-vector,openviking \
   --include-categories 1,2,3,4,5 \
   --judge-model gpt-4o-mini
 ```
 
-The compare command should expand into three normal strict runs and then render the group-level comparison artifacts. It should fail fast if a requested backend cannot be configured, unless `--allow-non-publishable` is set.
+The eval command should expand into normal strict runs and then render the group-level comparison artifacts. It should fail fast if a requested backend cannot be configured, unless `--allow-non-publishable` is set. As of the current code, this command shape is aspirational for `oo-builtin-vector`: `lib/backends.py` still needs the registry entry and CLI agent argument.
 
 ## File Structure
 
-The implementation should keep `eval.py` as the CLI entry point but split reusable logic into focused modules.
+The implementation currently keeps `main.py` as the CLI entry point and uses focused modules under `lib/`.
 
-- Modify: `eval.py`
+- Modify: `main.py`
   - CLI parsing and high-level orchestration only.
-- Create: `eval_openclaw.py`
+- Current: `lib/openclaw.py`
   - `/v1/responses` client, agent routing, session lookup, session reset.
-- Create: `eval_backends.py`
+- Current: `lib/backends.py`
   - common backend interface, backend registry, comparison orchestration helpers.
-- Create: `eval_openviking.py`
+- Current: `lib/openviking.py`
   - OpenViking ingest/search adapter and optional answer adapter.
-- Create: `eval_locomo.py`
+- Current: `lib/locomo.py`
   - LoCoMo loading, message formatting, session building, QA filtering, dataset stats.
-- Create: `eval_artifacts.py`
+- Current: `lib/artifacts.py`
   - run directory creation, manifest, JSONL writers, aggregate answer output, HTML report.
-- Create: `eval_memory_verify.py`
+- Current: `lib/memory_verify.py`
   - memory file snapshot and post-ingest verification.
-- Modify: `judge.py`
+- Current: `main.py judge` plus `lib/judge_util.py`
   - stable input/output contract and summary JSON.
 - Modify: `judge_util.py`
   - strict JSON judge response, bounded concurrency, retries, persisted reasoning.
@@ -292,7 +312,7 @@ The implementation should keep `eval.py` as the CLI entry point but split reusab
                                       |
                                       v
                               +---------------+
-                              | judge.py      |
+                              | main.py judge |
                               | grades/report |
                               +---------------+
 ```
@@ -314,7 +334,8 @@ Comparison data flow:
           |                |                |
           v                v                v
    +-------------+  +-------------+  +-------------+
-   | oo-builtin  |  |   oo-qmd    |  | openviking  |
+   | oo-builtin  |  |oo-builtin-  |  | openviking  |
+   |             |  |   vector    |  |             |
    | strict run  |  | strict run  |  | strict run  |
    +------+------+  +------+------+  +------+------+
           |                |                |
@@ -333,6 +354,8 @@ Comparison data flow:
 ```
 
 ## Task 1: Split LoCoMo Formatting And QA Selection
+
+Note: the task list below is the original implementation scaffold. The current repository has already landed most of this under `main.py` and `lib/*`; use the "Current Reality", "Backend Matrix", "Target CLI", and "File Structure" sections above as authoritative for new work. Remaining work from this document is specifically the stopped-QMD cleanup and the new `oo-builtin-vector` backend path.
 
 **Files:**
 - Create: `eval_locomo.py`
@@ -554,17 +577,29 @@ Add two configured OpenClaw variants:
 
 ```python
 oo-builtin -> OpenClawBackend(agent="eval-locomo-builtin", expected_memory_backend="builtin")
-oo-qmd     -> OpenClawBackend(agent="eval-locomo-qmd", expected_memory_backend="qmd")
+oo-builtin-vector -> OpenClawBackend(
+    agent="eval-locomo-builtin-vector",
+    expected_memory_backend="builtin-vector",
+    expected_memory_search={
+        "provider": "ollama",
+        "base_url": "http://127.0.0.1:11434",
+        "model": "qwen3-embedding:0.6b",
+        "store.vector.enabled": True,
+        "query.hybrid.enabled": True,
+    },
+)
 ```
 
 The harness cannot fully prove OpenClaw's in-process backend from the Responses API alone, so it must record the declared backend config and fail publishability if the expected agent/profile config cannot be verified from local config files.
+
+The legacy `oo-qmd` registry entry should be removed from default comparison docs and treated as stopped. If the code keeps it temporarily for old artifact compatibility, mark it non-primary and require explicit opt-in.
 
 - [ ] **Step 3: Add compare command**
 
 Add:
 
 ```bash
-uv run eval.py compare ./locomo10.json --run-group output/runs/<group> --backends oo-builtin,oo-qmd,openviking
+uv run python main.py eval ./locomo10.json --run-group output/runs/<group> --backends oo-builtin,oo-builtin-vector,openviking
 ```
 
 The command should create one strict run directory per backend and then render group-level summary/report artifacts.
@@ -1243,9 +1278,9 @@ uv sync
 mkdir -p ~/.openclaw-eval
 openclaw --profile eval config set gateway.port 19002 --strict-json
 openclaw --profile eval gateway
-uv run eval.py ingest ./locomo10.json --base-url http://127.0.0.1:19002 --agent eval-locomo --openclaw-profile eval --run-dir output/runs/dev-smoke --sample 0 --sessions 1-4 --agent-workspace ~/.openclaw-eval/workspace-locomo-eval
-uv run eval.py qa ./locomo10.json --base-url http://127.0.0.1:19002 --agent eval-locomo --openclaw-profile eval --run-dir output/runs/dev-smoke --sample 0 --include-categories 1,2,3,4,5
-uv run python judge.py output/runs/dev-smoke/answers.json --output output/runs/dev-smoke/judge_grades.json
+uv run python main.py ingest ./locomo10.json --base-url http://127.0.0.1:19002 --agent eval-locomo --openclaw-profile eval --run-dir output/runs/dev-smoke --sample 0 --sessions 1-4 --agent-workspace ~/.openclaw-eval/workspace-locomo-eval
+uv run python main.py qa ./locomo10.json --base-url http://127.0.0.1:19002 --agent eval-locomo --openclaw-profile eval --run-dir output/runs/dev-smoke --sample 0 --include-categories 1,2,3,4,5
+uv run python main.py judge output/runs/dev-smoke/answers.json --output output/runs/dev-smoke/judge_grades.json
 ```
 
 - [x] **Step 2: Document publishable profile run**
@@ -1265,13 +1300,13 @@ and the matching `--base-url`.
 Add:
 
 ```bash
-uv run eval.py compare ./locomo10.json \
+uv run python main.py eval ./locomo10.json \
   --run-group output/runs/locomo-memory-comparison-001 \
-  --backends oo-builtin,oo-qmd,openviking \
+  --backends oo-builtin,oo-builtin-vector,openviking \
   --include-categories 1,2,3,4,5
 ```
 
-Document that `oo-builtin` is the baseline, `oo-qmd` is an OpenClaw memory backend variant, and `openviking` is a separate memory system adapter. State that QMD extra paths/session transcript indexing are off for the primary comparison unless the run is explicitly marked as an ablation.
+Document that `oo-builtin` is the baseline, `oo-builtin-vector` is the OpenClaw builtin memory variant with vector retrieval, and `openviking` is a separate memory system adapter. State that `oo-qmd` is stopped for primary evals.
 
 - [ ] **Step 4: Document category policy**
 
@@ -1284,7 +1319,8 @@ A run is not publishable if:
 - `memory_write_verification.status` is `not_configured`
 - the eval agent is `main`
 - requested backend config cannot be verified
-- QMD extra paths or transcript indexing are enabled in a primary comparison run
+- `oo-builtin-vector` does not record the verified Ollama/Qwen3 embedding config
+- QMD is requested in a primary comparison run instead of an explicit ablation
 - category exclusions are not declared
 - manifest is missing dataset hash or eval commit
 - QA artifacts are incomplete
@@ -1294,7 +1330,7 @@ A run is not publishable if:
 Run:
 
 ```bash
-rg -n "eval-locomo|memory_write_verification|include-categories|openclaw --profile eval|oo-builtin|oo-qmd|openviking" README.md docs/runbooks/reproducible-locomo-eval.md
+rg -n "eval-locomo|memory_write_verification|include-categories|openclaw --profile eval|oo-builtin|oo-builtin-vector|qwen3-embedding|openviking" README.md docs/runbooks/reproducible-locomo-eval.md
 ```
 
 Expected: all key terms are present.
@@ -1338,12 +1374,12 @@ answers.json
 Run against `locomo10_small.json`:
 
 ```bash
-uv run eval.py ingest ./locomo10_small.json \
+uv run python main.py ingest ./locomo10_small.json \
   --agent eval-locomo \
   --run-dir output/runs/manual-small \
   --agent-workspace ~/.openclaw-eval/workspace-locomo-eval
 
-uv run eval.py qa ./locomo10_small.json \
+uv run python main.py qa ./locomo10_small.json \
   --agent eval-locomo \
   --run-dir output/runs/manual-small \
   --count 3 \
@@ -1370,15 +1406,16 @@ Only commit if this step produced intentional changes.
 
 The repo is ready for strict memory eval when all of these are true:
 
-- The harness can run `oo-builtin`, `oo-qmd`, and `openviking` under one comparison group.
+- The harness can run `oo-builtin`, `oo-builtin-vector`, and `openviking` under one comparison group.
 - `oo-builtin` is always reported as the baseline row.
 - The harness can target `openclaw/eval-locomo` without touching `main`.
-- Built-in and QMD OpenClaw runs use separate agents/profiles/workspaces.
+- Built-in and builtin-vector OpenClaw runs use separate agents/profiles/workspaces.
+- Builtin-vector manifests record the verified local Ollama embedding config: provider `ollama`, base URL `http://127.0.0.1:11434`, model `qwen3-embedding:0.6b`, vector store enabled, hybrid retrieval enabled.
 - OpenViking runs use separate account/user/agent identifiers and include both memory write and answer behavior.
 - Session lookup and reset are agent-aware.
 - LoCoMo category `5` is included unless explicitly excluded.
 - Every strict run writes a complete `manifest.json`.
-- Every strict QA run writes `answers.json` compatible with `judge.py`.
+- Every strict QA run writes `answers.json` compatible with `main.py judge`.
 - Ingest records memory write verification.
 - Judge output includes per-category scores and saved reasoning.
 - Group reports include per-backend scores, per-category scores, publishability status, and non-publishable reasons.
@@ -1451,8 +1488,8 @@ judge parsing
   test: malformed response becomes grade error record
 
 backend comparison
-  failure: QMD gets extra paths/transcripts and is not comparable to built-in
-  test: manifest publishability flags forbidden primary-comparison config
+  failure: builtin-vector silently uses a different embedding or hidden transcript source
+  test: manifest publishability flags missing/mismatched vector config and non-durable indexed paths
 
 openviking answer path
   failure: OpenViking ingest runs but QA answers bypass retrieval
@@ -1484,8 +1521,91 @@ Memory backend comparison status:
 - Dataset hash: <sha256>
 - Categories: <included categories>
 - Baseline: oo-builtin score <score>
-- QMD: score <score>, delta vs baseline <delta>
+- Builtin-vector: score <score>, delta vs baseline <delta>, embedding <provider/model>
 - OpenViking: score <score>, delta vs baseline <delta>
 - Non-publishable backends: <list and reasons>
 - Comparison report: <path>
 ```
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | not run | Not required for this backend-plumbing task. |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | not run | Not required before implementation; run before ship if the diff grows. |
+| Eng Review | `/plan-eng-review` | Architecture & tests | 1 | clear with required changes | 6 findings reviewed and resolved by user decisions. |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | not applicable | No UI scope. |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | not run | CLI help/defaults are covered by Eng review requirements. |
+
+- **UNRESOLVED:** 0.
+- **VERDICT:** ENG CLEARED — ready to implement `oo-builtin-vector` only if the implementation follows the approved full publishability gate, not the minimal runnable shortcut.
+
+### Approved Engineering Decisions
+
+1. `oo-builtin-vector` must be publishability-gated before any score is trusted. Do not stop at a backend registry row.
+2. The harness must verify the active `--openclaw-profile eval` vector config, not only the default `~/.openclaw/openclaw.json` config.
+3. Add `--builtin-vector-agent`, defaulting to `eval-locomo-builtin-vector`, and include it in strict isolation checks.
+4. Keep vector backend verification owned by `lib/backends.py`; `main.py` should only orchestrate the pipeline.
+5. Change the default eval backend list from `oo-builtin,oo-qmd,openviking` to `oo-builtin,oo-builtin-vector,openviking`; keep `oo-qmd` explicit-only for ablations.
+6. Add negative tests for wrong vector config, not just happy-path registry tests.
+
+### Implementation Requirements
+
+- Add `oo-builtin-vector` to `build_backend()` with `expected_memory_backend="builtin-vector"`.
+- Add a backend-owned verifier that reads `agents.defaults.memorySearch` from the active OpenClaw profile and records both expected and actual config in `manifest.json.backend_config`.
+- Required vector config for publishable runs:
+  - provider: `ollama`
+  - remote/base URL: `http://127.0.0.1:11434`
+  - model: `qwen3-embedding:0.6b`
+  - vector store enabled
+  - hybrid query enabled
+  - `vectorWeight=0.8`, `textWeight=0.2`, `candidateMultiplier=6`
+- `oo-builtin-vector` must be non-publishable, or fail before run unless `--allow-non-publishable` is set, when required vector config cannot be verified.
+- The manifest must make config traceability obvious enough that a later result row can be audited without re-reading local machine state.
+- Strict isolation must preserve the durable-memory write surface: `tools.allow` must be exactly `memory_search`, `memory_get`, `write`, and `edit`. Do not "harden" the profile by removing `write` or `edit`; that makes builtin memory unable to persist memories and invalidates the row.
+
+### Test Coverage Diagram
+
+```text
+CODE PATHS                                                EVAL/USER FLOWS
+[+] lib/backends.py                                       [+] `main.py eval --backends oo-builtin-vector`
+  ├── [GAP] build_backend("oo-builtin-vector")              ├── [GAP] [->EVAL] backend accepted and run dir scoped
+  ├── [GAP] manifest_config includes expected+actual        ├── [GAP] wrong profile config rejected/non-publishable
+  ├── [GAP] profile config verifier happy path              └── [GAP] manifest records Qwen3/Ollama config
+  └── [GAP] profile config verifier wrong-provider/model
+
+[+] main.py
+  ├── [GAP] --builtin-vector-agent CLI argument
+  ├── [GAP] default backend list excludes stopped QMD
+  └── [GAP] strict_isolation_agents_for_args includes vector agent
+
+[+] tests
+  ├── [GAP] tests/test_eval_backends.py positive vector config
+  ├── [GAP] tests/test_eval_backends.py negative vector config
+  └── [GAP] tests/test_eval_artifacts.py strict isolation vector agent
+
+COVERAGE: 0/10 planned paths currently covered for builtin-vector.
+QUALITY TARGET: all 10 paths need unit coverage before any real eval score is reported.
+```
+
+### Required Tests
+
+- `tests/test_eval_backends.py`
+  - `test_build_backend_supports_builtin_vector`
+  - `test_builtin_vector_manifest_records_expected_and_actual_memory_search`
+  - `test_builtin_vector_config_verification_rejects_wrong_provider`
+  - `test_builtin_vector_config_verification_rejects_wrong_model`
+  - `test_builtin_vector_config_verification_rejects_disabled_vector_store`
+  - `test_builtin_vector_config_verification_rejects_disabled_hybrid_query`
+- `tests/test_eval_artifacts.py`
+  - update `test_eval_isolation_gate_checks_backend_agents` so `oo-builtin-vector` checks `builtin_vector_agent`.
+  - add a default-backends regression test for `oo-builtin,oo-builtin-vector,openviking`.
+- CLI smoke after implementation:
+  - `PYTHONPATH=. uv run pytest tests/test_eval_backends.py tests/test_eval_artifacts.py`
+  - `PYTHONPATH=. uv run python main.py eval --help`
+
+### Risks To Watch During Implementation
+
+- OpenClaw config shape may differ between `remote.baseUrl`, `remote.base_url`, or nested vector-store keys. The verifier should normalize known shapes and fail closed when required fields are absent.
+- Do not claim vector dimension unless the config or a probe can verify it. Recording provider/model/weights is required; dimension is only publishable if observed.
+- Do not remove `oo-qmd` support in the same patch unless explicitly requested. The reviewed scope is "explicit-only", not deletion.

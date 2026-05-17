@@ -1,14 +1,22 @@
 import unittest
 from unittest import mock
 
-from lib.backends import OpenClawBackend, backend_run_dir, build_backend
+from lib.backends import (
+    EXPECTED_BUILTIN_VECTOR_MEMORY_SEARCH,
+    OpenClawBackend,
+    backend_run_dir,
+    build_backend,
+    verify_builtin_vector_memory_search,
+)
 
 
 class Args:
     base_url = "http://127.0.0.1:19002"
     token = "token"
     builtin_agent = "eval-locomo-builtin"
+    builtin_vector_agent = "eval-locomo-builtin-vector"
     qmd_agent = "eval-locomo-qmd"
+    openclaw_profile = "eval"
     openviking_account = None
     openviking_agent_id = "eval-locomo-openviking"
 
@@ -30,6 +38,93 @@ class EvalBackendsTests(unittest.TestCase):
             expected_memory_backend="qmd",
         )
         self.assertEqual(backend.manifest_config()["expected_memory_backend"], "qmd")
+
+    def test_build_backend_supports_builtin_vector(self):
+        memory_search = {
+            "provider": "ollama",
+            "remote": {"baseUrl": "http://127.0.0.1:11434"},
+            "model": "qwen3-embedding:0.6b",
+            "store": {"vector": {"enabled": True}},
+            "query": {
+                "hybrid": {
+                    "enabled": True,
+                    "vectorWeight": 0.8,
+                    "textWeight": 0.2,
+                    "candidateMultiplier": 6,
+                }
+            },
+        }
+        with mock.patch("lib.backends.read_openclaw_memory_search", return_value=memory_search):
+            backend = build_backend("oo-builtin-vector", Args())
+
+        self.assertEqual(backend.backend_id, "oo-builtin-vector")
+        self.assertEqual(backend.agent, "eval-locomo-builtin-vector")
+        self.assertEqual(backend.manifest_config()["expected_memory_backend"], "builtin-vector")
+        self.assertEqual(backend.publishability_failures(), [])
+
+    def test_builtin_vector_manifest_records_expected_and_actual_memory_search(self):
+        memory_search = {
+            "provider": "ollama",
+            "remote": {"baseUrl": "http://127.0.0.1:11434"},
+            "model": "qwen3-embedding:0.6b",
+            "store": {"vector": {"enabled": True}},
+            "query": {
+                "hybrid": {
+                    "enabled": True,
+                    "vectorWeight": 0.8,
+                    "textWeight": 0.2,
+                    "candidateMultiplier": 6,
+                }
+            },
+        }
+        with mock.patch("lib.backends.read_openclaw_memory_search", return_value=memory_search):
+            backend = build_backend("oo-builtin-vector", Args())
+
+        config = backend.manifest_config()
+        self.assertEqual(config["expected_memory_search"], EXPECTED_BUILTIN_VECTOR_MEMORY_SEARCH)
+        self.assertEqual(config["actual_memory_search"]["model"], "qwen3-embedding:0.6b")
+        self.assertTrue(config["memory_search_verified"])
+
+    def test_builtin_vector_config_verification_rejects_wrong_provider(self):
+        actual, failures = verify_builtin_vector_memory_search({
+            "provider": "openai",
+            "remote": {"baseUrl": "http://127.0.0.1:11434"},
+            "model": "qwen3-embedding:0.6b",
+            "store": {"vector": {"enabled": True}},
+            "query": {"hybrid": {"enabled": True, "vectorWeight": 0.8, "textWeight": 0.2, "candidateMultiplier": 6}},
+        })
+        self.assertEqual(actual["provider"], "openai")
+        self.assertIn("provider expected 'ollama'", failures[0])
+
+    def test_builtin_vector_config_verification_rejects_wrong_model(self):
+        _, failures = verify_builtin_vector_memory_search({
+            "provider": "ollama",
+            "remote": {"baseUrl": "http://127.0.0.1:11434"},
+            "model": "nomic-embed-text",
+            "store": {"vector": {"enabled": True}},
+            "query": {"hybrid": {"enabled": True, "vectorWeight": 0.8, "textWeight": 0.2, "candidateMultiplier": 6}},
+        })
+        self.assertTrue(any("model expected 'qwen3-embedding:0.6b'" in failure for failure in failures))
+
+    def test_builtin_vector_config_verification_rejects_disabled_vector_store(self):
+        _, failures = verify_builtin_vector_memory_search({
+            "provider": "ollama",
+            "remote": {"baseUrl": "http://127.0.0.1:11434"},
+            "model": "qwen3-embedding:0.6b",
+            "store": {"vector": {"enabled": False}},
+            "query": {"hybrid": {"enabled": True, "vectorWeight": 0.8, "textWeight": 0.2, "candidateMultiplier": 6}},
+        })
+        self.assertTrue(any("store.vector.enabled expected True" in failure for failure in failures))
+
+    def test_builtin_vector_config_verification_rejects_disabled_hybrid_query(self):
+        _, failures = verify_builtin_vector_memory_search({
+            "provider": "ollama",
+            "remote": {"baseUrl": "http://127.0.0.1:11434"},
+            "model": "qwen3-embedding:0.6b",
+            "store": {"vector": {"enabled": True}},
+            "query": {"hybrid": {"enabled": False, "vectorWeight": 0.8, "textWeight": 0.2, "candidateMultiplier": 6}},
+        })
+        self.assertTrue(any("query.hybrid.enabled expected True" in failure for failure in failures))
 
     def test_openclaw_backend_forwards_per_sample_agent_override(self):
         """Regression: per-sample agent must reach the wire, not the base agent."""

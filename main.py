@@ -81,6 +81,7 @@ from lib.openclaw import (
 # ---------------------------------------------------------------------------
 
 STRICT_MEMORY_TOOLS = {"memory_search", "memory_get", "write", "edit"}
+DEFAULT_EVAL_BACKENDS = "oo-builtin,oo-builtin-vector,openviking"
 STRICT_FORBIDDEN_TOOLS = {
     "exec",
     "process",
@@ -322,6 +323,8 @@ def strict_isolation_agents_for_args(args: argparse.Namespace) -> list[str]:
     backends = [item.strip() for item in args.backends.split(",") if item.strip()]
     if "oo-builtin" in backends:
         agents.append(args.builtin_agent)
+    if "oo-builtin-vector" in backends:
+        agents.append(args.builtin_vector_agent)
     if "oo-qmd" in backends:
         agents.append(args.qmd_agent)
     return agents or [args.agent]
@@ -1069,6 +1072,10 @@ def _collect_one_backend(args: argparse.Namespace, backend_id: str, group_dir: P
             "memory write verification failed or is not configured"
             + (f" ({memory_verified_detail})" if memory_verified_detail else "")
         )
+    backend_failures = []
+    if hasattr(backend, "publishability_failures"):
+        backend_failures = backend.publishability_failures()
+    reasons.extend(backend_failures)
 
     ingest_summary_path = Path(run_args.run_dir) / "ingest_summary.json"
     if ingest_summary_path.exists():
@@ -1274,10 +1281,11 @@ def main() -> None:
     eval_parser.add_argument("--run-group", required=True, help="Run group output directory")
     eval_parser.add_argument(
         "--backends",
-        default="oo-builtin,oo-qmd,openviking",
+        default=DEFAULT_EVAL_BACKENDS,
         help="Comma-delimited backend ids",
     )
     eval_parser.add_argument("--builtin-agent", default="eval-locomo-builtin")
+    eval_parser.add_argument("--builtin-vector-agent", default="eval-locomo-builtin-vector")
     eval_parser.add_argument("--qmd-agent", default="eval-locomo-qmd")
     eval_parser.add_argument("--allow-non-publishable", action="store_true", default=False)
     eval_parser.add_argument("--judge-token", default=None, help="Judge LLM API key (or set OPENAI_API_KEY)")
