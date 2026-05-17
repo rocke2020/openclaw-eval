@@ -290,6 +290,159 @@ class EvalArtifactsTests(unittest.TestCase):
         )
         self.assertNotIn("oo-qmd", main_module.DEFAULT_EVAL_BACKENDS)
 
+    def test_ingest_allows_no_response_reply_after_memory_write(self):
+        sample = {
+            "sample_id": "conv-1",
+            "conversation": {
+                "speaker_a": "A",
+                "speaker_b": "B",
+                "session_1_date_time": "today",
+                "session_1": [{"speaker": "A", "text": "hello"}],
+            },
+        }
+        args = argparse.Namespace(
+            user=None,
+            tail="[]",
+            agent="base-agent",
+            agent_workspace=None,
+            openclaw_home="/tmp/openclaw-eval",
+        )
+
+        with (
+            mock.patch.object(
+                main_module,
+                "_call_ingest",
+                return_value=("No response from OpenClaw.", {"total_tokens": 1}),
+            ),
+            mock.patch.object(main_module, "_maybe_reset_session"),
+        ):
+            records, verification = main_module._ingest_one_sample(sample, args, None)
+
+        self.assertIsNone(verification)
+        self.assertEqual(records[0]["status"], "ok")
+        self.assertNotIn("error_type", records[0])
+
+    def test_ingest_marks_timeout_reply_failed(self):
+        sample = {
+            "sample_id": "conv-1",
+            "conversation": {
+                "speaker_a": "A",
+                "speaker_b": "B",
+                "session_1_date_time": "today",
+                "session_1": [{"speaker": "A", "text": "hello"}],
+            },
+        }
+        args = argparse.Namespace(
+            user=None,
+            tail="[]",
+            agent="base-agent",
+            agent_workspace=None,
+            openclaw_home="/tmp/openclaw-eval",
+        )
+
+        with (
+            mock.patch.object(
+                main_module,
+                "_call_ingest",
+                return_value=(
+                    "Request timed out before a response was generated. Please try again.",
+                    {"total_tokens": 1},
+                ),
+            ),
+            mock.patch.object(main_module, "_maybe_reset_session"),
+        ):
+            records, verification = main_module._ingest_one_sample(sample, args, None)
+
+        self.assertIsNone(verification)
+        self.assertEqual(records[0]["status"], "failed")
+        self.assertEqual(records[0]["error_type"], "OpenClawNoResponse")
+        self.assertTrue(records[0]["retryable"])
+
+    def test_ingest_marks_agent_generation_failure_failed(self):
+        sample = {
+            "sample_id": "conv-1",
+            "conversation": {
+                "speaker_a": "A",
+                "speaker_b": "B",
+                "session_1_date_time": "today",
+                "session_1": [{"speaker": "A", "text": "hello"}],
+            },
+        }
+        args = argparse.Namespace(
+            user=None,
+            tail="[]",
+            agent="base-agent",
+            agent_workspace=None,
+            openclaw_home="/tmp/openclaw-eval",
+        )
+
+        with (
+            mock.patch.object(
+                main_module,
+                "_call_ingest",
+                return_value=("⚠️ Agent couldn't generate a response. Note: some tool actions may have already run.", {}),
+            ),
+            mock.patch.object(main_module, "_maybe_reset_session"),
+        ):
+            records, verification = main_module._ingest_one_sample(sample, args, None)
+
+        self.assertIsNone(verification)
+        self.assertEqual(records[0]["status"], "failed")
+        self.assertEqual(records[0]["error_type"], "OpenClawNoResponse")
+        self.assertTrue(records[0]["retryable"])
+
+    def test_ingest_accepts_agent_generation_failure_when_memory_changed(self):
+        sample = {
+            "sample_id": "conv-1",
+            "conversation": {
+                "speaker_a": "A",
+                "speaker_b": "B",
+                "session_1_date_time": "today",
+                "session_1": [{"speaker": "A", "text": "hello"}],
+            },
+        }
+        args = argparse.Namespace(
+            user=None,
+            tail="[]",
+            agent="base-agent",
+            agent_workspace="/tmp/workspace",
+            openclaw_home="/tmp/openclaw-eval",
+        )
+
+        with (
+            mock.patch.object(main_module, "_resolve_sample_agent", return_value=("base-agent-conv-1", "/tmp/workspace-conv-1")),
+            mock.patch.object(
+                main_module,
+                "snapshot_memory_files",
+                side_effect=[
+                    {},
+                    {},
+                    {"MEMORY.md": {"sha256": "new"}},
+                    {"MEMORY.md": {"sha256": "new"}},
+                ],
+            ),
+            mock.patch.object(
+                main_module,
+                "diff_memory_snapshots",
+                side_effect=[
+                    {"created": ["MEMORY.md"], "modified": [], "unchanged": [], "write_detected": True},
+                    {"created": ["MEMORY.md"], "modified": [], "unchanged": [], "write_detected": True},
+                ],
+            ),
+            mock.patch.object(
+                main_module,
+                "_call_ingest",
+                return_value=("⚠️ Agent couldn't generate a response. Note: some tool actions may have already run.", {}),
+            ),
+            mock.patch.object(main_module, "_maybe_reset_session"),
+        ):
+            records, verification = main_module._ingest_one_sample(sample, args, None)
+
+        self.assertEqual(records[0]["status"], "ok")
+        self.assertTrue(records[0]["session_write_detected"])
+        self.assertEqual(records[0]["warning"], "OpenClaw agent could not generate a response")
+        self.assertTrue(verification["write_detected"])
+
     def test_run_qa_writes_strict_artifacts_with_mocked_backend(self):
         sample = {
             "sample_id": "conv-26",

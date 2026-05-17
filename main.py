@@ -401,6 +401,24 @@ def _call_answer(args, user_key: str, question: str) -> tuple[str, dict]:
     )
 
 
+def _ingest_reply_failure(reply: str) -> str | None:
+    normalized = reply.strip()
+    if not normalized:
+        return "empty OpenClaw response"
+    if normalized.startswith("Request timed out before a response was generated."):
+        return "OpenClaw response timed out"
+    if normalized.startswith("⚠️ Agent couldn't generate a response."):
+        return "OpenClaw agent could not generate a response"
+    return None
+
+
+def _session_memory_diff(before: dict | None, workspace: str | None) -> dict | None:
+    if before is None or not workspace:
+        return None
+    after = snapshot_memory_files(workspace)
+    return diff_memory_snapshots(before, after)
+
+
 def _maybe_reset_session(args, user_key: str) -> None:
     if getattr(args, "backend", None) is not None and getattr(args.backend, "backend_kind", "") != "openclaw":
         return
@@ -486,17 +504,39 @@ def _ingest_one_sample(
             "user": user_key,
             "agent": sample_agent,
         }
+        session_before = snapshot_memory_files(sample_ws) if sample_ws else None
         try:
             reply, usage = _call_ingest(sample_args, user_key, msg)
             print(
                 f"    -> {reply[:80]}{'...' if len(reply) > 80 else ''}",
                 file=sys.stderr,
             )
-            record.update({
-                "status": "ok",
-                "reply": reply,
-                "usage": usage,
-            })
+            session_diff = _session_memory_diff(session_before, sample_ws)
+            session_write_detected = (
+                bool(session_diff and session_diff.get("write_detected"))
+                if session_diff is not None
+                else None
+            )
+            failure = _ingest_reply_failure(reply)
+            if failure and not session_write_detected:
+                record.update({
+                    "status": "failed",
+                    "reply": reply,
+                    "usage": usage,
+                    "session_write_detected": session_write_detected,
+                    "error_type": "OpenClawNoResponse",
+                    "error_message": failure,
+                    "retryable": True,
+                })
+            else:
+                record.update({
+                    "status": "ok",
+                    "reply": reply,
+                    "usage": usage,
+                    "session_write_detected": session_write_detected,
+                })
+                if failure:
+                    record["warning"] = failure
         except Exception as e:
             from lib.openclaw import is_retryable_error
             print(f"    -> [ERROR] {type(e).__name__}: {e}", file=sys.stderr)
