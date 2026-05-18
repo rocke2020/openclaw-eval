@@ -44,6 +44,7 @@ class OpenClawBackend:
     token: str
     agent: str
     expected_memory_backend: str
+    actual_memory_backend: str | None = None
     expected_memory_search: dict | None = None
     actual_memory_search: dict | None = None
     memory_search_failures: list[str] | None = None
@@ -64,6 +65,7 @@ class OpenClawBackend:
             "backend_id": self.backend_id,
             "agent": self.agent,
             "expected_memory_backend": self.expected_memory_backend,
+            "actual_memory_backend": self.actual_memory_backend,
         }
         if self.expected_memory_search is not None:
             config["expected_memory_search"] = self.expected_memory_search
@@ -141,6 +143,32 @@ def read_openclaw_memory_search(profile: str) -> dict:
     return parsed
 
 
+def read_openclaw_memory_backend(profile: str) -> str | None:
+    openclaw_bin = shutil.which("openclaw")
+    if not openclaw_bin:
+        raise RuntimeError("openclaw binary not found")
+    result = subprocess.run(
+        [
+            openclaw_bin,
+            "--profile",
+            profile,
+            "config",
+            "get",
+            "memory.backend",
+            "--json",
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        stdout = result.stdout.strip()
+        raise RuntimeError(stderr or stdout or "openclaw config get memory.backend failed")
+    parsed = json.loads(result.stdout)
+    return parsed if isinstance(parsed, str) else None
+
+
 def _nested_get(config: dict, *path: str):
     value = config
     for key in path:
@@ -194,11 +222,20 @@ def build_backend(backend_id: str, args) -> MemoryBackend:
     if backend_id == "oo-builtin-vector":
         expected = dict(EXPECTED_BUILTIN_VECTOR_MEMORY_SEARCH)
         try:
+            actual_backend = read_openclaw_memory_backend(
+                getattr(args, "openclaw_profile", "eval")
+            )
             raw_memory_search = read_openclaw_memory_search(
                 getattr(args, "openclaw_profile", "eval")
             )
             actual, failures = verify_builtin_vector_memory_search(raw_memory_search, expected)
+            if actual_backend == "qmd":
+                failures.append(
+                    "memory.backend is qmd; oo-builtin-vector requires OpenClaw builtin memory, "
+                    "not QMD search"
+                )
         except Exception as exc:
+            actual_backend = None
             actual = None
             failures = [str(exc)]
         return OpenClawBackend(
@@ -207,6 +244,7 @@ def build_backend(backend_id: str, args) -> MemoryBackend:
             token=args.token,
             agent=getattr(args, "builtin_vector_agent", "eval-locomo-builtin-vector"),
             expected_memory_backend="builtin-vector",
+            actual_memory_backend=actual_backend,
             expected_memory_search=expected,
             actual_memory_search=actual,
             memory_search_failures=failures,

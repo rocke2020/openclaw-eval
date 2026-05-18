@@ -54,7 +54,10 @@ class EvalBackendsTests(unittest.TestCase):
                 }
             },
         }
-        with mock.patch("lib.backends.read_openclaw_memory_search", return_value=memory_search):
+        with (
+            mock.patch("lib.backends.read_openclaw_memory_backend", return_value=None),
+            mock.patch("lib.backends.read_openclaw_memory_search", return_value=memory_search),
+        ):
             backend = build_backend("oo-builtin-vector", Args())
 
         self.assertEqual(backend.backend_id, "oo-builtin-vector")
@@ -77,13 +80,45 @@ class EvalBackendsTests(unittest.TestCase):
                 }
             },
         }
-        with mock.patch("lib.backends.read_openclaw_memory_search", return_value=memory_search):
+        with (
+            mock.patch("lib.backends.read_openclaw_memory_backend", return_value=None),
+            mock.patch("lib.backends.read_openclaw_memory_search", return_value=memory_search),
+        ):
             backend = build_backend("oo-builtin-vector", Args())
 
         config = backend.manifest_config()
+        self.assertIsNone(config["actual_memory_backend"])
         self.assertEqual(config["expected_memory_search"], EXPECTED_BUILTIN_VECTOR_MEMORY_SEARCH)
         self.assertEqual(config["actual_memory_search"]["model"], "qwen3-embedding:0.6b")
         self.assertTrue(config["memory_search_verified"])
+
+    def test_builtin_vector_rejects_qmd_memory_backend(self):
+        memory_search = {
+            "provider": "ollama",
+            "remote": {"baseUrl": "http://127.0.0.1:11434"},
+            "model": "qwen3-embedding:0.6b",
+            "store": {"vector": {"enabled": True}},
+            "query": {
+                "hybrid": {
+                    "enabled": True,
+                    "vectorWeight": 0.8,
+                    "textWeight": 0.2,
+                    "candidateMultiplier": 6,
+                }
+            },
+        }
+        with (
+            mock.patch("lib.backends.read_openclaw_memory_backend", return_value="qmd"),
+            mock.patch("lib.backends.read_openclaw_memory_search", return_value=memory_search),
+        ):
+            backend = build_backend("oo-builtin-vector", Args())
+
+        config = backend.manifest_config()
+        self.assertEqual(config["actual_memory_backend"], "qmd")
+        self.assertFalse(config["memory_search_verified"])
+        self.assertTrue(
+            any("memory.backend is qmd" in failure for failure in backend.publishability_failures())
+        )
 
     def test_builtin_vector_config_verification_rejects_wrong_provider(self):
         actual, failures = verify_builtin_vector_memory_search({

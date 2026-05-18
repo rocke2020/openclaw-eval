@@ -22,6 +22,7 @@ Read [references/full-eval-run-principles.md](references/full-eval-run-principle
 5. Use per-sample isolation for every publishable OpenClaw run. Pass a base eval agent plus `--agent-workspace`; the harness provisions `<base-agent>-<sample_id>` and `<base-workspace>-<sample_id>` automatically. Do not delete prior memory or session state to create freshness.
 6. Disable and verify skill visibility for the base eval agent and the effective per-sample agents. `modelVisible` and `commandVisible` must be empty.
 7. Verify eval-profile gateway, backend, model, memory, and auth settings before ingest.
+   For `oo-builtin-vector`, verify both `memory.backend` and actual runtime `memory_search` tool results. `agents.defaults.memorySearch` alone is not sufficient: `memory.backend=qmd` means the run is QMD even if qwen3 embedding is configured.
 8. Run ingest and QA into a new `output/runs/<run-group>/<backend-id>/` directory, with `--agent-workspace` configured. Enable canaries for multi-sample final runs unless intentionally recorded as skipped.
 9. For long or restarted runs, pass `--resume` with the same run group. The harness may reuse complete ingest artifacts and per-item `qa.checkpoint.jsonl` / `judge.checkpoint.jsonl` records. Resume is allowed only when the same dataset/backend/profile/agent/workspace pattern is being continued.
 10. Run the judge against `answers.json` and verify judge totals match answer totals.
@@ -33,6 +34,7 @@ Read [references/full-eval-run-principles.md](references/full-eval-run-principle
 - Never run a full `locomo10.json` final row until a sample smoke run has passed for the same backend/profile/agent/workspace pattern.
 - Never run a publishable OpenClaw final row without per-sample isolation via `--agent-workspace`.
 - Never remove `write` or `edit` from the eval profile's durable-memory tool surface. `tools.allow` must be exactly `memory_search`, `memory_get`, `write`, and `edit`; builtin memory persists through file `write`/`edit`.
+- Never accept an `oo-builtin-vector` row when `openclaw --profile eval config get memory.backend --json` returns `"qmd"` or session transcripts show `memory_search` results with `provider/model/backend=qmd`.
 - Never pass `--user` for primary multi-sample runs.
 - Never use `--allow-non-publishable` for final rows.
 - Never report scores from `comparison_summary.json` or `comparison_report.html` unless regenerated after judging.
@@ -48,6 +50,7 @@ Before saying a full eval result is valid, confirm:
 - `eval_repo_dirty=false`
 - `tools.allow` is exactly `["edit", "memory_get", "memory_search", "write"]` after sorting
 - `openclaw_agent` and `backend_config.agent` match the intended base agent for the backend
+- for `oo-builtin-vector`, `backend_config.actual_memory_backend` is not `qmd`, and sampled session transcripts show `memory_search` is not `provider=qmd`, `model=qmd`, `mode=search`
 - `memory_write_verification` is `configured`
 - every selected sample has a per-sample verification entry with `write_detected=true`
 - `dataset_qa_count_selected` matches the declared scope
