@@ -3,6 +3,8 @@ from unittest import mock
 
 from lib.backends import (
     EXPECTED_BUILTIN_VECTOR_MEMORY_SEARCH,
+    EXPECTED_OPENCLAW_MEMORY_BACKENDS,
+    OPENCLAW_MEMORY_BACKEND_SCHEMA_VALUES,
     OpenClawBackend,
     backend_run_dir,
     build_backend,
@@ -57,7 +59,7 @@ class EvalBackendsTests(unittest.TestCase):
             },
         }
         with (
-            mock.patch("lib.backends.read_openclaw_memory_backend", return_value="builtin-vector"),
+            mock.patch("lib.backends.read_openclaw_memory_backend", return_value="builtin"),
             mock.patch("lib.backends.read_openclaw_memory_search", return_value=memory_search),
         ):
             backend = build_backend("oo-builtin-vector", Args())
@@ -65,6 +67,8 @@ class EvalBackendsTests(unittest.TestCase):
         self.assertEqual(backend.backend_id, "oo-builtin-vector")
         self.assertEqual(backend.agent, "eval-locomo-builtin-vector")
         self.assertEqual(backend.manifest_config()["expected_memory_backend"], "builtin-vector")
+        self.assertEqual(backend.manifest_config()["actual_memory_backend"], "builtin")
+        self.assertTrue(backend.manifest_config()["memory_backend_verified"])
         self.assertEqual(backend.publishability_failures(), [])
 
     def test_builtin_vector_manifest_records_expected_and_actual_memory_search(self):
@@ -83,13 +87,13 @@ class EvalBackendsTests(unittest.TestCase):
             },
         }
         with (
-            mock.patch("lib.backends.read_openclaw_memory_backend", return_value="builtin-vector"),
+            mock.patch("lib.backends.read_openclaw_memory_backend", return_value="builtin"),
             mock.patch("lib.backends.read_openclaw_memory_search", return_value=memory_search),
         ):
             backend = build_backend("oo-builtin-vector", Args())
 
         config = backend.manifest_config()
-        self.assertEqual(config["actual_memory_backend"], "builtin-vector")
+        self.assertEqual(config["actual_memory_backend"], "builtin")
         self.assertEqual(config["expected_memory_search"], EXPECTED_BUILTIN_VECTOR_MEMORY_SEARCH)
         self.assertEqual(config["actual_memory_search"]["model"], "qwen3-embedding:0.6b")
         self.assertTrue(config["memory_search_verified"])
@@ -121,7 +125,7 @@ class EvalBackendsTests(unittest.TestCase):
         self.assertTrue(config["memory_search_verified"])
         self.assertTrue(
             any(
-                "memory.backend expected 'builtin-vector', got 'qmd'" in failure
+                "memory.backend expected 'builtin', got 'qmd'" in failure
                 for failure in backend.publishability_failures()
             )
         )
@@ -164,15 +168,40 @@ class EvalBackendsTests(unittest.TestCase):
         self.assertEqual(backend.publishability_failures(), [])
 
     def test_memory_backend_verification_rejects_any_mismatch(self):
-        self.assertEqual(verify_openclaw_memory_backend("builtin-vector", "builtin-vector"), [])
+        # oo-builtin-vector requires memory.backend == "builtin" at runtime
+        # (vector lives inside builtin via agents.defaults.memorySearch).
+        self.assertEqual(verify_openclaw_memory_backend("builtin", "builtin-vector"), [])
         self.assertEqual(
-            verify_openclaw_memory_backend("other", "builtin-vector"),
-            ["memory.backend expected 'builtin-vector', got 'other'"],
+            verify_openclaw_memory_backend("qmd", "builtin-vector"),
+            ["memory.backend expected 'builtin', got 'qmd'"],
+        )
+        # Even the literal string "builtin-vector" must be rejected — it's not a
+        # schema-valid runtime value (probed: schema enum = {"builtin","qmd"}).
+        self.assertEqual(
+            verify_openclaw_memory_backend("builtin-vector", "builtin-vector"),
+            ["memory.backend expected 'builtin', got 'builtin-vector'"],
         )
         self.assertEqual(
             verify_openclaw_memory_backend(None, "builtin-vector"),
-            ["memory.backend expected 'builtin-vector', got None"],
+            ["memory.backend expected 'builtin', got None"],
         )
+
+    def test_expected_backend_map_values_are_schema_valid(self):
+        # Regression guard for the gate-mapping bug shipped earlier: the
+        # original mapping had {"builtin-vector": "builtin-vector"}, which
+        # OpenClaw's schema actively refuses (enum: "builtin" | "qmd"). The
+        # gate then could not pass for any possible runtime state. Every
+        # expected value in the map must be a value OpenClaw can actually
+        # hold — otherwise the check is unreachable.
+        for backend_id, expected in EXPECTED_OPENCLAW_MEMORY_BACKENDS.items():
+            with self.subTest(backend_id=backend_id):
+                self.assertIn(
+                    expected,
+                    OPENCLAW_MEMORY_BACKEND_SCHEMA_VALUES,
+                    f"{backend_id!r} maps to {expected!r}, which is not a valid "
+                    f"OpenClaw memory.backend value "
+                    f"(allowed: {sorted(OPENCLAW_MEMORY_BACKEND_SCHEMA_VALUES)}).",
+                )
 
     def test_builtin_vector_config_verification_rejects_wrong_provider(self):
         actual, failures = verify_builtin_vector_memory_search({

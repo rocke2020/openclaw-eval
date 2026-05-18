@@ -23,9 +23,16 @@ EXPECTED_BUILTIN_VECTOR_MEMORY_SEARCH = {
     "query.hybrid.candidateMultiplier": 6,
 }
 
+OPENCLAW_MEMORY_BACKEND_SCHEMA_VALUES = {"builtin", "qmd"}
+
+# Maps harness backend ids to the value memory.backend must hold at runtime.
+# Vector retrieval is an option *inside* the "builtin" engine (activated via
+# agents.defaults.memorySearch.store.vector.enabled), not a distinct backend.
+# Every value here must appear in OPENCLAW_MEMORY_BACKEND_SCHEMA_VALUES — see
+# tests/test_eval_backends.py for the contract test that enforces this.
 EXPECTED_OPENCLAW_MEMORY_BACKENDS = {
     "builtin": "builtin",
-    "builtin-vector": "builtin-vector",
+    "builtin-vector": "builtin",
     "qmd": "qmd",
 }
 
