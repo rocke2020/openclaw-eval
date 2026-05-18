@@ -110,7 +110,7 @@ class EvalArtifactsTests(unittest.TestCase):
             )
 
         self.assertTrue(any("memory_search used qmd" in failure for failure in failures))
-        self.assertTrue(any("expected 'builtin-vector', got 'qmd'" in failure for failure in failures))
+        self.assertTrue(any("expected 'builtin', got 'qmd'" in failure for failure in failures))
 
     def test_runtime_memory_search_verification_requires_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -122,7 +122,7 @@ class EvalArtifactsTests(unittest.TestCase):
 
         self.assertEqual(failures, ["no runtime memory_search evidence found in session transcripts"])
 
-    def test_runtime_memory_search_verification_accepts_matching_backend(self):
+    def test_runtime_memory_search_verification_accepts_builtin_vector_runtime_backend(self):
         with tempfile.TemporaryDirectory() as tmp:
             sessions = Path(tmp) / "agents" / "agent-conv-1" / "sessions"
             sessions.mkdir(parents=True)
@@ -135,7 +135,7 @@ class EvalArtifactsTests(unittest.TestCase):
                             "details": {
                                 "provider": "ollama",
                                 "model": "qwen3-embedding:0.6b",
-                                "debug": {"backend": "builtin-vector"},
+                                "debug": {"backend": "builtin"},
                             },
                         }
                     }

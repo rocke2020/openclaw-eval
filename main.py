@@ -57,7 +57,7 @@ from lib.artifacts import (
     write_manifest,
 )
 from lib.agent_provision import ensure_sample_agent, provision_sample_agents
-from lib.backends import backend_run_dir, build_backend
+from lib.backends import EXPECTED_OPENCLAW_MEMORY_BACKENDS, backend_run_dir, build_backend
 from lib.judge_util import grade_answers, grade_answers_incremental, load_answers
 from lib.locomo import (
     build_session_messages,
@@ -581,6 +581,10 @@ def verify_runtime_memory_search_backend(
     expected_backend: str,
 ) -> list[str]:
     """Verify runtime memory_search evidence matches the claimed backend."""
+    expected_runtime_backend = EXPECTED_OPENCLAW_MEMORY_BACKENDS.get(
+        expected_backend,
+        expected_backend,
+    )
     failures = []
     evidence_count = 0
     for agent_id in agent_ids:
@@ -594,9 +598,9 @@ def verify_runtime_memory_search_backend(
                 failures.append(
                     f"{agent_id}: memory_search used qmd at {path}:{line_number}"
                 )
-            if runtime_backend is not None and runtime_backend != expected_backend:
+            if runtime_backend is not None and runtime_backend != expected_runtime_backend:
                 failures.append(
-                    f"{agent_id}: memory_search backend expected {expected_backend!r}, "
+                    f"{agent_id}: memory_search backend expected {expected_runtime_backend!r}, "
                     f"got {runtime_backend!r} at {path}:{line_number}"
                 )
     if evidence_count == 0:
