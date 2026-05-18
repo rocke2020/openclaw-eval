@@ -39,6 +39,7 @@ class EvalBackendsTests(unittest.TestCase):
             expected_memory_backend="qmd",
         )
         self.assertEqual(backend.manifest_config()["expected_memory_backend"], "qmd")
+        self.assertTrue(backend.manifest_config()["memory_backend_verified"])
 
     def test_build_backend_supports_builtin_vector(self):
         memory_search = {
@@ -116,10 +117,51 @@ class EvalBackendsTests(unittest.TestCase):
 
         config = backend.manifest_config()
         self.assertEqual(config["actual_memory_backend"], "qmd")
-        self.assertFalse(config["memory_search_verified"])
+        self.assertFalse(config["memory_backend_verified"])
+        self.assertTrue(config["memory_search_verified"])
         self.assertTrue(
-            any("memory.backend expected 'builtin-vector', got 'qmd'" in failure for failure in backend.publishability_failures())
+            any(
+                "memory.backend expected 'builtin-vector', got 'qmd'" in failure
+                for failure in backend.publishability_failures()
+            )
         )
+
+    def test_builtin_rejects_memory_backend_mismatch(self):
+        with mock.patch("lib.backends.read_openclaw_memory_backend", return_value="qmd"):
+            backend = build_backend("oo-builtin", Args())
+
+        config = backend.manifest_config()
+        self.assertEqual(config["actual_memory_backend"], "qmd")
+        self.assertFalse(config["memory_backend_verified"])
+        self.assertTrue(
+            any(
+                "memory.backend expected 'builtin', got 'qmd'" in failure
+                for failure in backend.publishability_failures()
+            )
+        )
+
+    def test_qmd_rejects_memory_backend_mismatch(self):
+        with mock.patch("lib.backends.read_openclaw_memory_backend", return_value="builtin"):
+            backend = build_backend("oo-qmd", Args())
+
+        config = backend.manifest_config()
+        self.assertEqual(config["actual_memory_backend"], "builtin")
+        self.assertFalse(config["memory_backend_verified"])
+        self.assertTrue(
+            any(
+                "memory.backend expected 'qmd', got 'builtin'" in failure
+                for failure in backend.publishability_failures()
+            )
+        )
+
+    def test_builtin_records_matching_memory_backend(self):
+        with mock.patch("lib.backends.read_openclaw_memory_backend", return_value="builtin"):
+            backend = build_backend("oo-builtin", Args())
+
+        config = backend.manifest_config()
+        self.assertEqual(config["actual_memory_backend"], "builtin")
+        self.assertTrue(config["memory_backend_verified"])
+        self.assertEqual(backend.publishability_failures(), [])
 
     def test_memory_backend_verification_rejects_any_mismatch(self):
         self.assertEqual(verify_openclaw_memory_backend("builtin-vector", "builtin-vector"), [])

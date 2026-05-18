@@ -51,6 +51,7 @@ class OpenClawBackend:
     agent: str
     expected_memory_backend: str
     actual_memory_backend: str | None = None
+    memory_backend_failures: list[str] | None = None
     expected_memory_search: dict | None = None
     actual_memory_search: dict | None = None
     memory_search_failures: list[str] | None = None
@@ -72,6 +73,8 @@ class OpenClawBackend:
             "agent": self.agent,
             "expected_memory_backend": self.expected_memory_backend,
             "actual_memory_backend": self.actual_memory_backend,
+            "memory_backend_verified": not self.memory_backend_failures,
+            "memory_backend_failures": self.memory_backend_failures or [],
         }
         if self.expected_memory_search is not None:
             config["expected_memory_search"] = self.expected_memory_search
@@ -81,10 +84,17 @@ class OpenClawBackend:
         return config
 
     def publishability_failures(self) -> list[str]:
-        return [
-            f"builtin-vector memorySearch verification failed: {failure}"
-            for failure in (self.memory_search_failures or [])
+        failures = [
+            f"OpenClaw memory backend verification failed: {failure}"
+            for failure in (self.memory_backend_failures or [])
         ]
+        failures.extend(
+            [
+                f"builtin-vector memorySearch verification failed: {failure}"
+                for failure in (self.memory_search_failures or [])
+            ]
+        )
+        return failures
 
 
 @dataclass
@@ -223,32 +233,43 @@ def verify_openclaw_memory_backend(actual: str | None, expected: str) -> list[st
     return []
 
 
+def read_and_verify_openclaw_memory_backend(profile: str, expected: str) -> tuple[str | None, list[str]]:
+    try:
+        actual = read_openclaw_memory_backend(profile)
+    except Exception as exc:
+        return None, [str(exc)]
+    return actual, verify_openclaw_memory_backend(actual, expected)
+
+
 def build_backend(backend_id: str, args) -> MemoryBackend:
     if backend_id == "oo-builtin":
+        actual_backend, backend_failures = read_and_verify_openclaw_memory_backend(
+            getattr(args, "openclaw_profile", "eval"),
+            "builtin",
+        )
         return OpenClawBackend(
             backend_id=backend_id,
             base_url=args.base_url,
             token=args.token,
             agent=getattr(args, "builtin_agent", "eval-locomo-builtin"),
             expected_memory_backend="builtin",
+            actual_memory_backend=actual_backend,
+            memory_backend_failures=backend_failures,
         )
     if backend_id == "oo-builtin-vector":
         expected = dict(EXPECTED_BUILTIN_VECTOR_MEMORY_SEARCH)
+        actual_backend, backend_failures = read_and_verify_openclaw_memory_backend(
+            getattr(args, "openclaw_profile", "eval"),
+            "builtin-vector",
+        )
         try:
-            actual_backend = read_openclaw_memory_backend(
-                getattr(args, "openclaw_profile", "eval")
-            )
             raw_memory_search = read_openclaw_memory_search(
                 getattr(args, "openclaw_profile", "eval")
             )
-            actual, failures = verify_builtin_vector_memory_search(raw_memory_search, expected)
-            failures.extend(
-                verify_openclaw_memory_backend(actual_backend, "builtin-vector")
-            )
+            actual, search_failures = verify_builtin_vector_memory_search(raw_memory_search, expected)
         except Exception as exc:
-            actual_backend = None
             actual = None
-            failures = [str(exc)]
+            search_failures = [str(exc)]
         return OpenClawBackend(
             backend_id=backend_id,
             base_url=args.base_url,
@@ -256,17 +277,24 @@ def build_backend(backend_id: str, args) -> MemoryBackend:
             agent=getattr(args, "builtin_vector_agent", "eval-locomo-builtin-vector"),
             expected_memory_backend="builtin-vector",
             actual_memory_backend=actual_backend,
+            memory_backend_failures=backend_failures,
             expected_memory_search=expected,
             actual_memory_search=actual,
-            memory_search_failures=failures,
+            memory_search_failures=search_failures,
         )
     if backend_id == "oo-qmd":
+        actual_backend, backend_failures = read_and_verify_openclaw_memory_backend(
+            getattr(args, "openclaw_profile", "eval"),
+            "qmd",
+        )
         return OpenClawBackend(
             backend_id=backend_id,
             base_url=args.base_url,
             token=args.token,
             agent=getattr(args, "qmd_agent", "eval-locomo-qmd"),
             expected_memory_backend="qmd",
+            actual_memory_backend=actual_backend,
+            memory_backend_failures=backend_failures,
         )
     if backend_id == "openviking":
         return OpenVikingBackend(
