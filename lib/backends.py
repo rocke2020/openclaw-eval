@@ -23,6 +23,12 @@ EXPECTED_BUILTIN_VECTOR_MEMORY_SEARCH = {
     "query.hybrid.candidateMultiplier": 6,
 }
 
+EXPECTED_OPENCLAW_MEMORY_BACKENDS = {
+    "builtin": "builtin",
+    "builtin-vector": "builtin-vector",
+    "qmd": "qmd",
+}
+
 
 class MemoryBackend(Protocol):
     backend_id: str
@@ -210,6 +216,13 @@ def verify_builtin_vector_memory_search(actual: dict, expected: dict | None = No
     return normalized, failures
 
 
+def verify_openclaw_memory_backend(actual: str | None, expected: str) -> list[str]:
+    expected_backend = EXPECTED_OPENCLAW_MEMORY_BACKENDS.get(expected, expected)
+    if actual != expected_backend:
+        return [f"memory.backend expected {expected_backend!r}, got {actual!r}"]
+    return []
+
+
 def build_backend(backend_id: str, args) -> MemoryBackend:
     if backend_id == "oo-builtin":
         return OpenClawBackend(
@@ -229,11 +242,9 @@ def build_backend(backend_id: str, args) -> MemoryBackend:
                 getattr(args, "openclaw_profile", "eval")
             )
             actual, failures = verify_builtin_vector_memory_search(raw_memory_search, expected)
-            if actual_backend == "qmd":
-                failures.append(
-                    "memory.backend is qmd; oo-builtin-vector requires OpenClaw builtin memory, "
-                    "not QMD search"
-                )
+            failures.extend(
+                verify_openclaw_memory_backend(actual_backend, "builtin-vector")
+            )
         except Exception as exc:
             actual_backend = None
             actual = None
