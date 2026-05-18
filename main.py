@@ -527,6 +527,83 @@ def _load_resume_judge_records(output_path: Path) -> dict[str, dict]:
     return resumed
 
 
+def _openclaw_home_path(args: argparse.Namespace) -> Path:
+    configured = getattr(args, "openclaw_home", None)
+    return Path(configured).expanduser() if configured else Path.home() / ".openclaw"
+
+
+def _extract_memory_search_details(record: dict) -> dict | None:
+    message = record.get("message")
+    if not isinstance(message, dict):
+        return None
+    if message.get("role") != "toolResult" or message.get("toolName") != "memory_search":
+        return None
+    details = message.get("details")
+    if isinstance(details, dict):
+        return details
+    content = message.get("content")
+    if isinstance(content, list):
+        for item in content:
+            if not isinstance(item, dict) or item.get("type") != "text":
+                continue
+            try:
+                parsed = json.loads(item.get("text", ""))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+    return None
+
+
+def _iter_agent_memory_search_details(openclaw_home: Path, agent_id: str):
+    sessions_dir = openclaw_home / "agents" / agent_id / "sessions"
+    if not sessions_dir.exists():
+        return
+    for path in sorted(sessions_dir.glob("*.jsonl*")):
+        if path.name == "sessions.json":
+            continue
+        with path.open("r", encoding="utf-8") as f:
+            for line_number, line in enumerate(f, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                details = _extract_memory_search_details(record)
+                if details is not None:
+                    yield path, line_number, details
+
+
+def verify_runtime_memory_search_backend(
+    openclaw_home: Path,
+    agent_ids: list[str],
+    expected_backend: str,
+) -> list[str]:
+    """Verify runtime memory_search evidence matches the claimed backend."""
+    failures = []
+    evidence_count = 0
+    for agent_id in agent_ids:
+        for path, line_number, details in _iter_agent_memory_search_details(openclaw_home, agent_id):
+            evidence_count += 1
+            provider = details.get("provider")
+            model = details.get("model")
+            debug = details.get("debug") if isinstance(details.get("debug"), dict) else {}
+            runtime_backend = debug.get("backend")
+            if provider == "qmd" or model == "qmd":
+                failures.append(
+                    f"{agent_id}: memory_search used qmd at {path}:{line_number}"
+                )
+            if runtime_backend is not None and runtime_backend != expected_backend:
+                failures.append(
+                    f"{agent_id}: memory_search backend expected {expected_backend!r}, "
+                    f"got {runtime_backend!r} at {path}:{line_number}"
+                )
+    if evidence_count == 0:
+        failures.append("no runtime memory_search evidence found in session transcripts")
+    return failures
+
+
 # ---------------------------------------------------------------------------
 # Subcommands
 # ---------------------------------------------------------------------------
@@ -1206,6 +1283,17 @@ def run_pipeline(args: argparse.Namespace) -> None:
 def _collect_one_backend(args: argparse.Namespace, backend_id: str, group_dir: Path) -> None:
     """Run ingest + QA for a single backend."""
     backend = build_backend(backend_id, args)
+    setup_failures = (
+        backend.publishability_failures()
+        if hasattr(backend, "publishability_failures")
+        else []
+    )
+    if setup_failures and not args.allow_non_publishable:
+        raise SystemExit(
+            f"Backend {backend_id} setup is non-publishable before ingest: "
+            f"{'; '.join(setup_failures)}"
+        )
+
     run_args = copy.copy(args)
     run_args.backend = backend
     run_args.backend_id = backend.backend_id
@@ -1220,6 +1308,24 @@ def _collect_one_backend(args: argparse.Namespace, backend_id: str, group_dir: P
 
     print(f"\n=== Backend {backend_id}: ingest ===", file=sys.stderr)
     run_ingest(run_args)
+
+    if backend_id == "oo-builtin-vector":
+        samples = load_locomo_data(run_args.input, run_args.sample)
+        sample_agent_ids = [
+            _resolve_sample_agent(run_args, item["sample_id"])[0]
+            for item in samples
+        ]
+        runtime_failures = verify_runtime_memory_search_backend(
+            _openclaw_home_path(run_args),
+            sample_agent_ids,
+            backend.expected_memory_backend,
+        )
+        if runtime_failures and not args.allow_non_publishable:
+            raise SystemExit(
+                f"Backend {backend_id} runtime memory_search verification failed before QA: "
+                f"{'; '.join(runtime_failures[:10])}"
+            )
+
     print(f"\n=== Backend {backend_id}: qa ===", file=sys.stderr)
     run_qa(run_args)
 

@@ -83,6 +83,73 @@ class EvalArtifactsTests(unittest.TestCase):
 
         self.assertEqual(records[main_module._judge_record_key(record)], record)
 
+    def test_runtime_memory_search_verification_rejects_qmd_transcript(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sessions = Path(tmp) / "agents" / "agent-conv-1" / "sessions"
+            sessions.mkdir(parents=True)
+            (sessions / "s1.jsonl.1").write_text(
+                json.dumps(
+                    {
+                        "message": {
+                            "role": "toolResult",
+                            "toolName": "memory_search",
+                            "details": {
+                                "provider": "qmd",
+                                "model": "qmd",
+                                "debug": {"backend": "qmd"},
+                            },
+                        }
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            failures = main_module.verify_runtime_memory_search_backend(
+                Path(tmp), ["agent-conv-1"], "builtin-vector"
+            )
+
+        self.assertTrue(any("memory_search used qmd" in failure for failure in failures))
+        self.assertTrue(any("expected 'builtin-vector', got 'qmd'" in failure for failure in failures))
+
+    def test_runtime_memory_search_verification_requires_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "agents" / "agent-conv-1" / "sessions").mkdir(parents=True)
+
+            failures = main_module.verify_runtime_memory_search_backend(
+                Path(tmp), ["agent-conv-1"], "builtin-vector"
+            )
+
+        self.assertEqual(failures, ["no runtime memory_search evidence found in session transcripts"])
+
+    def test_runtime_memory_search_verification_accepts_matching_backend(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sessions = Path(tmp) / "agents" / "agent-conv-1" / "sessions"
+            sessions.mkdir(parents=True)
+            (sessions / "s1.jsonl").write_text(
+                json.dumps(
+                    {
+                        "message": {
+                            "role": "toolResult",
+                            "toolName": "memory_search",
+                            "details": {
+                                "provider": "ollama",
+                                "model": "qwen3-embedding:0.6b",
+                                "debug": {"backend": "builtin-vector"},
+                            },
+                        }
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            failures = main_module.verify_runtime_memory_search_backend(
+                Path(tmp), ["agent-conv-1"], "builtin-vector"
+            )
+
+        self.assertEqual(failures, [])
+
     def test_render_report_html_includes_score_and_manifest(self):
         html = render_report_html(
             {"run_id": "r1", "openclaw_version": "OpenClaw 2026.5.7 (eeef486)"},
