@@ -47,6 +47,42 @@ class EvalArtifactsTests(unittest.TestCase):
             self.assertEqual(data["results"], [{"question": "q"}])
             self.assertEqual(data["summary"], {"total": 1})
 
+    def test_load_resume_qa_records_prefers_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            (run_dir / "qa.checkpoint.jsonl").write_text(
+                json.dumps({"sample_id": "conv-1", "qi": 1, "response": "checkpoint"}) + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "qa.jsonl").write_text(
+                json.dumps({"sample_id": "conv-1", "qi": 1, "response": "final"}) + "\n",
+                encoding="utf-8",
+            )
+
+            records = main_module._load_resume_qa_records(run_dir)
+
+        self.assertEqual(records["conv-1\t1"]["response"], "checkpoint")
+
+    def test_load_resume_judge_records_keys_answer_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "judge_grades.json"
+            record = {
+                "sample_id": "conv-1",
+                "qi": 1,
+                "question": "q",
+                "expected": "a",
+                "response": "r",
+                "grade": True,
+            }
+            (Path(tmp) / "judge.checkpoint.jsonl").write_text(
+                json.dumps(record) + "\n",
+                encoding="utf-8",
+            )
+
+            records = main_module._load_resume_judge_records(output)
+
+        self.assertEqual(records[main_module._judge_record_key(record)], record)
+
     def test_render_report_html_includes_score_and_manifest(self):
         html = render_report_html(
             {"run_id": "r1", "openclaw_version": "OpenClaw 2026.5.7 (eeef486)"},

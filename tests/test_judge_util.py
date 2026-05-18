@@ -2,9 +2,10 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from lib.artifacts import per_category_summary
-from lib.judge_util import load_answers, locomo_grader
+from lib.judge_util import grade_answers_incremental, load_answers, locomo_grader
 
 
 class _Message:
@@ -55,6 +56,33 @@ class JudgeUtilTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["grade"])
         self.assertEqual(result["label"], "CORRECT")
         self.assertEqual(result["judge_model"], "judge-model")
+
+    async def test_incremental_grader_reuses_existing_records(self):
+        answers = [
+            {"sample_id": "conv-1", "qi": 1, "question": "q1", "expected": "a1", "response": "r1"},
+            {"sample_id": "conv-1", "qi": 2, "question": "q2", "expected": "a2", "response": "r2"},
+        ]
+        existing = {"conv-1\t1": {**answers[0], "grade": True, "label": "CORRECT"}}
+        completed = []
+
+        async def fake_grader(_client, model, question, expected, response):
+            self.assertEqual((model, question, expected, response), ("judge-model", "q2", "a2", "r2"))
+            return {"grade": False, "label": "WRONG", "reasoning": "no", "judge_model": model}
+
+        with mock.patch("lib.judge_util.locomo_grader", side_effect=fake_grader):
+            graded = await grade_answers_incremental(
+                answers,
+                api_key="test-key",
+                model="judge-model",
+                parallel=1,
+                existing_by_key=existing,
+                key_fn=lambda item: f"{item['sample_id']}\t{item['qi']}",
+                on_grade=completed.append,
+            )
+
+        self.assertEqual(graded[0]["label"], "CORRECT")
+        self.assertEqual(graded[1]["label"], "WRONG")
+        self.assertEqual(completed, [graded[1]])
 
 
 if __name__ == "__main__":

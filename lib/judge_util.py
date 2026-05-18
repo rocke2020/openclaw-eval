@@ -153,3 +153,65 @@ async def grade_answers(
                 }
 
     return await asyncio.gather(*(grade_one(item) for item in answers))
+
+
+async def grade_answers_incremental(
+    answers: list[dict],
+    base_url: str | None = None,
+    api_key: str | None = None,
+    model: str = "gpt-4o-mini",
+    parallel: int = 8,
+    existing_by_key: dict[str, dict] | None = None,
+    key_fn=None,
+    on_grade=None,
+) -> list[dict]:
+    """Grade answers, reusing existing grades and reporting newly completed rows."""
+    existing_by_key = existing_by_key or {}
+    key_fn = key_fn or (lambda item: "")
+
+    load_dotenv()
+    client = AsyncOpenAI(
+        base_url=base_url or os.getenv("OPENAI_BASE_URL"),
+        api_key=api_key or os.getenv("OPENAI_API_KEY"),
+    )
+
+    semaphore = asyncio.Semaphore(parallel)
+    results: list[dict | None] = [None] * len(answers)
+    pending: list[tuple[int, dict]] = []
+
+    for index, item in enumerate(answers):
+        existing = existing_by_key.get(key_fn(item))
+        if existing is not None:
+            results[index] = existing
+        else:
+            pending.append((index, item))
+
+    async def grade_one(index: int, item: dict) -> tuple[int, dict]:
+        async with semaphore:
+            try:
+                payload = await locomo_grader(
+                    client,
+                    model,
+                    item["question"],
+                    item["expected"],
+                    item["response"],
+                )
+                graded = {**item, **payload}
+            except Exception as exc:
+                graded = {
+                    **item,
+                    "grade": False,
+                    "label": "ERROR",
+                    "reasoning": str(exc),
+                    "judge_model": model,
+                }
+            if on_grade:
+                on_grade(graded)
+            return index, graded
+
+    tasks = [asyncio.create_task(grade_one(index, item)) for index, item in pending]
+    for task in asyncio.as_completed(tasks):
+        index, graded = await task
+        results[index] = graded
+
+    return [item for item in results if item is not None]

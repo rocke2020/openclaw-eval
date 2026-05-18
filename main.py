@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import copy
+import hashlib
 import json
 import os
 import re
@@ -57,7 +58,7 @@ from lib.artifacts import (
 )
 from lib.agent_provision import ensure_sample_agent, provision_sample_agents
 from lib.backends import backend_run_dir, build_backend
-from lib.judge_util import grade_answers, load_answers
+from lib.judge_util import grade_answers, grade_answers_incremental, load_answers
 from lib.locomo import (
     build_session_messages,
     dataset_stats,
@@ -449,6 +450,83 @@ def _write_run_manifest(args, samples: list[dict], backend_config: dict | None =
     return manifest
 
 
+def _append_jsonl(path: Path, record: dict) -> None:
+    """Append one JSONL record and flush it for resume-safe checkpoints."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def _load_jsonl_records(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    records = []
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                records.append(json.loads(line))
+    return records
+
+
+def _qa_record_key(record: dict) -> str:
+    return f"{record.get('sample_id', '')}\t{record.get('qi', '')}"
+
+
+def _answer_content_hash(record: dict) -> str:
+    payload = {
+        "sample_id": record.get("sample_id", ""),
+        "qi": record.get("qi", ""),
+        "question": record.get("question", ""),
+        "expected": record.get("expected", ""),
+        "response": record.get("response", ""),
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _judge_record_key(record: dict) -> str:
+    return f"{_qa_record_key(record)}\t{_answer_content_hash(record)}"
+
+
+def _load_resume_qa_records(run_dir: Path) -> dict[str, dict]:
+    """Load previously completed QA answers keyed by sample and question index."""
+    records: list[dict] = []
+    checkpoint_path = run_dir / "qa.checkpoint.jsonl"
+    qa_path = run_dir / "qa.jsonl"
+    answers_path = run_dir / "answers.json"
+    if checkpoint_path.exists():
+        records.extend(_load_jsonl_records(checkpoint_path))
+    elif qa_path.exists():
+        records.extend(_load_jsonl_records(qa_path))
+    elif answers_path.exists():
+        data = json.loads(answers_path.read_text(encoding="utf-8"))
+        records.extend(data.get("results", []) if isinstance(data, dict) else data)
+
+    resumed = {}
+    for record in records:
+        if record.get("sample_id") and record.get("qi"):
+            resumed[_qa_record_key(record)] = record
+    return resumed
+
+
+def _load_resume_judge_records(output_path: Path) -> dict[str, dict]:
+    checkpoint_path = output_path.with_name("judge.checkpoint.jsonl")
+    records: list[dict] = []
+    if checkpoint_path.exists():
+        records.extend(_load_jsonl_records(checkpoint_path))
+    elif output_path.exists():
+        data = json.loads(output_path.read_text(encoding="utf-8"))
+        records.extend(data.get("grades", []) if isinstance(data, dict) else data)
+
+    resumed = {}
+    for record in records:
+        if record.get("sample_id") and record.get("qi"):
+            resumed[_judge_record_key(record)] = record
+    return resumed
+
+
 # ---------------------------------------------------------------------------
 # Subcommands
 # ---------------------------------------------------------------------------
@@ -565,6 +643,29 @@ def run_ingest(args: argparse.Namespace) -> list[dict]:
     """Load conversations into OpenClaw/OpenViking."""
     session_range = parse_session_range(args.sessions) if args.sessions else None
     run_dir = ensure_run_dir(args.run_dir) if args.run_dir else None
+    if getattr(args, "resume", False) and run_dir:
+        ingest_path = run_dir / "ingest.jsonl"
+        summary_path = run_dir / "ingest_summary.json"
+        if ingest_path.exists() and summary_path.exists():
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            records = _load_jsonl_records(ingest_path)
+            verification_path = run_dir / "memory_write_verification.json"
+            memory_ok = True
+            if getattr(args, "agent_workspace", None):
+                memory_ok = False
+                if verification_path.exists():
+                    verification = json.loads(verification_path.read_text(encoding="utf-8"))
+                    samples_verified = verification.get("samples", [])
+                    memory_ok = bool(samples_verified) and all(
+                        item.get("write_detected") for item in samples_verified
+                    )
+            if (
+                summary.get("sessions_failed", 0) == 0
+                and summary.get("sessions_total") == len(records)
+                and memory_ok
+            ):
+                print(f"    resume: using existing ingest artifacts in {run_dir}", file=sys.stderr)
+                return records
 
     if args.input.endswith(".json"):
         samples = load_locomo_data(args.input, args.sample)
@@ -713,6 +814,8 @@ async def run_sample_qa(
     sample_idx: int,
     args: argparse.Namespace,
     semaphore: asyncio.Semaphore,
+    resumed_by_key: dict[str, dict] | None = None,
+    checkpoint_path: Path | None = None,
 ) -> tuple[list[dict], dict]:
     """Process QA for a single sample. Returns (records, sample_usage)."""
     sample_id = item["sample_id"]
@@ -724,6 +827,7 @@ async def run_sample_qa(
 
     sample_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     records = []
+    resumed_by_key = resumed_by_key or {}
 
     # Create a shallow copy of args with the per-sample agent
     sample_args = copy.copy(args)
@@ -738,6 +842,22 @@ async def run_sample_qa(
             expected = str(qa["answer"])
             category = qa.get("category", "")
             evidence = qa.get("evidence", [])
+            resume_key = f"{sample_id}\t{qi}"
+            resumed = resumed_by_key.get(resume_key)
+            if (
+                resumed is not None
+                and resumed.get("question") == question
+                and str(resumed.get("expected")) == expected
+            ):
+                records.append(resumed)
+                usage = resumed.get("usage", {})
+                for k in sample_usage:
+                    sample_usage[k] += usage.get(k, 0)
+                print(
+                    f"  [{sample_idx}] Q{qi}/{len(qas)}: resumed",
+                    file=sys.stderr,
+                )
+                continue
 
             print(
                 f"  [{sample_idx}] Q{qi}/{len(qas)}: {question[:60]}{'...' if len(question) > 60 else ''}",
@@ -759,21 +879,22 @@ async def run_sample_qa(
 
             _maybe_reset_session(sample_args, user_key)
 
-            records.append(
-                {
-                    "sample_id": sample_id,
-                    "sample_idx": sample_idx,
-                    "qi": qi,
-                    "question": question,
-                    "expected": expected,
-                    "response": response,
-                    "category": category,
-                    "evidence": evidence,
-                    "user": user_key,
-                    "agent": sample_agent,
-                    "usage": usage,
-                }
-            )
+            record = {
+                "sample_id": sample_id,
+                "sample_idx": sample_idx,
+                "qi": qi,
+                "question": question,
+                "expected": expected,
+                "response": response,
+                "category": category,
+                "evidence": evidence,
+                "user": user_key,
+                "agent": sample_agent,
+                "usage": usage,
+            }
+            records.append(record)
+            if checkpoint_path is not None:
+                _append_jsonl(checkpoint_path, record)
 
     return records, sample_usage
 
@@ -793,10 +914,22 @@ def run_qa(args: argparse.Namespace) -> list[dict]:
     print(f"    agent: {args.agent}", file=sys.stderr)
     print(f"    parallel: {parallel}", file=sys.stderr)
 
+    run_dir = ensure_run_dir(args.run_dir) if args.run_dir else None
+    resumed_by_key: dict[str, dict] = {}
+    checkpoint_path: Path | None = None
+    if getattr(args, "resume", False) and run_dir:
+        resumed_by_key = _load_resume_qa_records(run_dir)
+        checkpoint_path = run_dir / "qa.checkpoint.jsonl"
+        print(f"    resume: loaded {len(resumed_by_key)} QA checkpoint record(s)", file=sys.stderr)
+    elif run_dir:
+        checkpoint_path = run_dir / "qa.checkpoint.jsonl"
+        if checkpoint_path.exists():
+            checkpoint_path.rename(run_dir / f"qa.checkpoint.jsonl.{os.getpid()}.bak")
+
     async def _run():
         semaphore = asyncio.Semaphore(parallel)
         tasks = [
-            run_sample_qa(item, idx + 1, args, semaphore)
+            run_sample_qa(item, idx + 1, args, semaphore, resumed_by_key, checkpoint_path)
             for idx, item in enumerate(samples)
         ]
         return await asyncio.gather(*tasks)
@@ -827,8 +960,13 @@ def run_qa(args: argparse.Namespace) -> list[dict]:
         write_json(run_dir / "qa_summary.json", summary)
         write_answers(run_dir / "answers.json", all_records, summary)
         if args.canary:
-            canary_records = run_canaries(samples, args)
-            write_jsonl(run_dir / "canary.jsonl", canary_records)
+            canary_path = run_dir / "canary.jsonl"
+            if getattr(args, "resume", False) and canary_path.exists():
+                canary_records = _load_jsonl_records(canary_path)
+                print(f"    resume: using existing {len(canary_records)} canary record(s)", file=sys.stderr)
+            else:
+                canary_records = run_canaries(samples, args)
+                write_jsonl(canary_path, canary_records)
 
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
@@ -1061,6 +1199,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             token=getattr(args, "judge_token", None) or os.environ.get("OPENAI_API_KEY"),
             model=getattr(args, "judge_model", None) or "gpt-4o-mini",
             parallel=getattr(args, "judge_parallel", 8),
+            resume=getattr(args, "resume", False),
         ))
 
 
@@ -1140,18 +1279,58 @@ async def run_judge_async(
     token: str | None,
     model: str,
     parallel: int,
+    resume: bool = False,
 ) -> None:
     """Grade QA answers with an LLM judge and write the final reports."""
     answers = load_answers(input_path)
     print(f"Loaded {len(answers)} answers from {input_path}", file=sys.stderr)
 
-    graded = await grade_answers(
-        answers,
-        base_url=base_url,
-        api_key=token,
-        model=model,
-        parallel=parallel,
-    )
+    if output_path:
+        output = Path(output_path)
+        checkpoint_path = output.with_name("judge.checkpoint.jsonl")
+        if resume:
+            existing_by_key = _load_resume_judge_records(output)
+            print(
+                f"Loaded {len(existing_by_key)} judge checkpoint record(s) from {checkpoint_path}",
+                file=sys.stderr,
+            )
+        else:
+            existing_by_key = {}
+            if checkpoint_path.exists():
+                checkpoint_path.rename(
+                    checkpoint_path.with_name(f"{checkpoint_path.name}.{os.getpid()}.bak")
+                )
+
+        completed_count = 0
+
+        def _checkpoint_grade(record: dict) -> None:
+            nonlocal completed_count
+            _append_jsonl(checkpoint_path, record)
+            completed_count += 1
+            if completed_count % 50 == 0:
+                print(
+                    f"  judge checkpointed {completed_count}/{len(answers) - len(existing_by_key)} new grade(s)",
+                    file=sys.stderr,
+                )
+
+        graded = await grade_answers_incremental(
+            answers,
+            base_url=base_url,
+            api_key=token,
+            model=model,
+            parallel=parallel,
+            existing_by_key=existing_by_key,
+            key_fn=_judge_record_key,
+            on_grade=_checkpoint_grade,
+        )
+    else:
+        graded = await grade_answers(
+            answers,
+            base_url=base_url,
+            api_key=token,
+            model=model,
+            parallel=parallel,
+        )
     summary = summarize_judged(graded)
 
     print(f"\nResults: {summary['correct']}/{summary['total']} correct ({summary['score']:.2%})")
@@ -1298,6 +1477,12 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--canary", action="store_true", default=False, help="Run cross-sample contamination canaries")
     parser.add_argument("--canary-count", type=int, default=3, help="Canary questions per sample pair")
     parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help="Reuse complete stage artifacts and per-item checkpoints in the run directory",
+    )
+    parser.add_argument(
         "--skip-strict-isolation-check", action="store_true", default=False,
         help="Skip eval-profile tool/skill isolation gate",
     )
@@ -1350,6 +1535,12 @@ def main() -> None:
         help="Model name for grading (default: gpt-4o-mini)",
     )
     judge_parser.add_argument("--parallel", type=int, default=8, help="Judge requests in flight")
+    judge_parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help="Reuse judge.checkpoint.jsonl or existing output grades",
+    )
 
     isolation_parser = subparsers.add_parser("isolation", help="Verify strict eval tool/skill isolation")
     isolation_parser.add_argument("--openclaw-profile", default="eval", help="OpenClaw profile name")
@@ -1359,7 +1550,15 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.mode == "judge":
-        asyncio.run(run_judge_async(args.input, args.output, args.base_url, args.token, args.model, args.parallel))
+        asyncio.run(run_judge_async(
+            args.input,
+            args.output,
+            args.base_url,
+            args.token,
+            args.model,
+            args.parallel,
+            args.resume,
+        ))
         return
 
     if args.mode == "isolation":

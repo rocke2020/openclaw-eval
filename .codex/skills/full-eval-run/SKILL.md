@@ -23,8 +23,9 @@ Read [references/full-eval-run-principles.md](references/full-eval-run-principle
 6. Disable and verify skill visibility for the base eval agent and the effective per-sample agents. `modelVisible` and `commandVisible` must be empty.
 7. Verify eval-profile gateway, backend, model, memory, and auth settings before ingest.
 8. Run ingest and QA into a new `output/runs/<run-group>/<backend-id>/` directory, with `--agent-workspace` configured. Enable canaries for multi-sample final runs unless intentionally recorded as skipped.
-9. Run the judge against `answers.json` and verify judge totals match answer totals.
-10. Accept and report only artifact-backed values from `manifest.json`, summaries, `memory_write_verification.json`, `answers.json`, and `judge_grades.json`.
+9. For long or restarted runs, pass `--resume` with the same run group. The harness may reuse complete ingest artifacts and per-item `qa.checkpoint.jsonl` / `judge.checkpoint.jsonl` records. Resume is allowed only when the same dataset/backend/profile/agent/workspace pattern is being continued.
+10. Run the judge against `answers.json` and verify judge totals match answer totals.
+11. Accept and report only artifact-backed values from `manifest.json`, summaries, `memory_write_verification.json`, `answers.json`, and `judge_grades.json`.
 
 ## Hard Rules
 
@@ -35,6 +36,7 @@ Read [references/full-eval-run-principles.md](references/full-eval-run-principle
 - Never pass `--user` for primary multi-sample runs.
 - Never use `--allow-non-publishable` for final rows.
 - Never report scores from `comparison_summary.json` or `comparison_report.html` unless regenerated after judging.
+- Never resume into a different backend, profile, agent, workspace, dataset scope, category policy, or judge model unless the changed dimension is explicitly documented and the artifacts are treated as non-publishable until reverified.
 - Never claim a condition is clean, enabled, disabled, absent, or verified without running the corresponding probe.
 - Do not delete existing eval memory or session files to prepare a run.
 
