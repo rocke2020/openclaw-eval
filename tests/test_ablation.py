@@ -214,6 +214,8 @@ class SearchEvidenceTests(unittest.TestCase):
         report = inspect_search_evidence([], forbid_vector=True)
         self.assertFalse(report["ok"])
         self.assertEqual(report["evidence_count"], 0)
+        self.assertEqual(len(report["failures"]), 1)
+        self.assertIn("no runtime memory_search evidence", report["failures"][0])
 
     def test_inspect_search_evidence_flags_qmd(self):
         items = [

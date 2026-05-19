@@ -282,6 +282,9 @@ def inspect_search_evidence(
                 }
             )
 
+    if sample_size == 0:
+        failures.append("no runtime memory_search evidence found in session transcripts")
+
     return {
         "ok": not failures and sample_size > 0,
         "evidence_count": sample_size,
