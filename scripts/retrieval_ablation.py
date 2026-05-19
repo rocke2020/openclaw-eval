@@ -2,7 +2,7 @@
 """Retrieval-only ablation orchestrator.
 
 Implements the experiment in
-`docs/eval-journal/2026-05-19-retrieval-only-ablation-plan.md`:
+`docs/eval-journal/2026-05-19-retrieval-only-ablation-results.md`:
 
     clone   Provision fresh per-sample agents and overlay condition A's
             written-memory snapshot so condition B starts from the exact

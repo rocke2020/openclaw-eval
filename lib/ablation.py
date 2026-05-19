@@ -1,7 +1,7 @@
 """Retrieval-only ablation helpers.
 
 Supports the experiment described in
-`docs/eval-journal/2026-05-19-retrieval-only-ablation-plan.md`:
+`docs/eval-journal/2026-05-19-retrieval-only-ablation-results.md`:
 given a source `oo-builtin-vector` run, clone its written-memory snapshot
 into fresh per-sample workspaces so a no-vector QA-only run can isolate
 the retrieval method as the only varying factor.

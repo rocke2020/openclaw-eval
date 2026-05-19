@@ -1,5 +1,56 @@
 # 2026-05-19 — Retrieval-only ablation: results
 
+## Design
+
+The `builtin-vector` full run (1183/1986 = 59.57%) landed very close to
+the repeated `builtin-memory` baseline (1193/1986 = 60.07%). A direct
+comparison of the two runs mixes two sources of variance: the
+ingest/write phase may produce different `MEMORY.md` + `memory/*.md`
+summaries across runs, and the QA phase uses different retrieval. To
+isolate retrieval, copy condition A's exact written-memory snapshot
+into fresh per-sample workspaces, then run QA-only with vector
+retrieval disabled.
+
+- **Condition A** — already-verified vector run: agent
+  `eval-locomo-builtin-vector-full-20260518-223504`, run dir
+  `output/runs/builtin-vector-full-20260518-223504/oo-builtin-vector/`,
+  `memorySearch` configured as `provider=ollama`,
+  `model=qwen3-embedding:0.6b`, `store.vector.enabled=true`,
+  hybrid weights 0.8 / 0.2.
+- **Condition B** — same memory snapshot, no-vector retrieval: provision
+  fresh per-sample agents under
+  `eval-locomo-ret-ablation-<ts>-conv-*` with workspaces under
+  `~/.openclaw-eval/workspace-ret-ablation-<ts>-conv-*`. Copy `MEMORY.md`
+  + `memory/*.md` from condition A's matching workspaces (no ingest).
+  Run QA only with
+  `agents.defaults.memorySearch.store.vector.enabled=false` and
+  `agents.defaults.memorySearch.query.hybrid.enabled=false`.
+
+Controls: same OpenClaw build, same eval profile (strict tool/skill
+isolation), same dataset, same per-sample-isolation policy, same judge
+model/base URL, identical pair keys `(sample_id, qi)`. Differences left
+floating: the retrieval mode itself and answer-model sampling noise.
+
+Gates required before running condition B and used by this run: clean
+git tree; `openclaw --profile eval skills check` shows no visible
+skills; `tools.allow` is exactly `{memory_search, memory_get, write,
+edit}`; all 10 source workspaces present; destination workspaces
+fresh; hash-verify `MEMORY.md` + `memory/*.md` source vs dest before
+QA; no ingest artifacts; one-sample QA smoke confirms `debug.backend
+== "builtin"` and no QMD evidence (the `provider`/`model` strings in
+`memory_search` details echo the configured embedding regardless of
+whether vector retrieval engages, so they are not reliable smoke
+signals on their own).
+
+Non-goals: this is not a new publishable benchmark row. Do not delete
+or reset any existing OpenClaw memory, sessions, or output artifacts.
+Compare condition B against condition A; do not compare it against the
+old `builtin-memory` runs as the primary result, because those did not
+share condition A's written-memory snapshot.
+
+The orchestrator + helpers live in `scripts/retrieval_ablation.py`
+(`clone` / `verify` / `smoke` / `compare`) and `lib/ablation.py`.
+
 ## Headline
 
 Given the **same** OpenClaw-written durable memory snapshot, switching
