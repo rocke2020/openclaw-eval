@@ -383,8 +383,34 @@ class EvalArtifactsTests(unittest.TestCase):
 
         self.assertEqual(
             main_module.strict_isolation_agents_for_args(args),
-            ["builtin-agent", "builtin-vector-agent"],
+            [
+                ("oo-builtin", "builtin-agent"),
+                ("oo-builtin-vector", "builtin-vector-agent"),
+            ],
         )
+
+    def test_strict_isolation_agents_includes_oc_ov_plugin_bare(self):
+        args = argparse.Namespace(
+            mode="eval",
+            backends="oc-ov-plugin-bare",
+            agent="default-agent",
+            builtin_agent="builtin-agent",
+            builtin_vector_agent="builtin-vector-agent",
+            qmd_agent="qmd-agent",
+            row_agent_map={"oc-ov-plugin-bare": "eval-locomo-ov-bare-test"},
+        )
+        pairs = main_module.strict_isolation_agents_for_args(args)
+        self.assertEqual(pairs, [("oc-ov-plugin-bare", "eval-locomo-ov-bare-test")])
+
+    def test_strict_isolation_expectations_widens_for_ov_plugin_bare(self):
+        expected_allow, expected_extra_deny = main_module._backend_isolation_expectations(
+            "oc-ov-plugin-bare",
+        )
+        self.assertEqual(
+            expected_allow,
+            {"memory_recall", "memory_store", "memory_forget", "ov_archive_expand", "memory_search"},
+        )
+        self.assertEqual(expected_extra_deny, {"add_resource", "add_skill"})
 
     def test_eval_default_backends_include_builtin_vector_not_qmd(self):
         self.assertEqual(

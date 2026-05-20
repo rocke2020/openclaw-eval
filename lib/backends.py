@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import json
 import shutil
@@ -248,6 +248,157 @@ def read_and_verify_openclaw_memory_backend(profile: str, expected: str) -> tupl
     return actual, verify_openclaw_memory_backend(actual, expected)
 
 
+# ---------------------------------------------------------------------------
+# OpenClaw + OpenViking plugin rows (reproduction of volcengine/OpenViking
+# published LoCoMo comparison). The OV plugin sits in OC's contextEngine slot;
+# the agent loop is unchanged from `oo-*` rows. What differs per row is
+# `plugins.slots.contextEngine` + `plugins.entries.memory-core.enabled` +
+# `tools.allow` widening for OV plugin tools.
+# ---------------------------------------------------------------------------
+
+# Tool names the OV plugin registers (manifest: openclaw.plugin.json).
+OPENVIKING_PLUGIN_TOOLS = (
+    "memory_recall",
+    "memory_store",
+    "memory_forget",
+    "ov_archive_expand",
+    "memory_search",
+)
+
+# Tools the OV plugin ALSO exposes but that we deny for strict memory-only eval
+# (they let the model widen scope mid-eval).
+OPENVIKING_PLUGIN_DENIED_TOOLS = ("add_resource", "add_skill")
+
+# OC builtin memory tools (carried over to augmented row; codex flagged that
+# the augmented row may be a hybrid surface — held behind a flag for now).
+OPENCLAW_BUILTIN_MEMORY_TOOLS = ("memory_search", "memory_get", "write", "edit")
+
+
+# Per-row config matrix — single source of truth, asserted by the strict gate
+# from live profile state and recorded in the manifest.
+OPENCLAW_OV_PLUGIN_ROW_MATRIX: dict[str, dict] = {
+    "oc-ov-plugin-bare": {
+        "memory_core_enabled": False,
+        "context_engine_slot": "openviking",
+        "tools_allow": tuple(sorted(set(OPENVIKING_PLUGIN_TOOLS))),
+        "tools_deny_required": tuple(sorted(set(OPENVIKING_PLUGIN_DENIED_TOOLS))),
+        "requires_hybrid_flag": False,
+    },
+    "oc-ov-plugin-augmented": {
+        "memory_core_enabled": True,
+        "context_engine_slot": "openviking",
+        "tools_allow": tuple(sorted(set(OPENVIKING_PLUGIN_TOOLS) | set(OPENCLAW_BUILTIN_MEMORY_TOOLS))),
+        "tools_deny_required": tuple(sorted(set(OPENVIKING_PLUGIN_DENIED_TOOLS))),
+        "requires_hybrid_flag": True,  # codex: hybrid surface unverified
+    },
+}
+
+
+@dataclass
+class OpenClawOVPluginBackend:
+    """OpenClaw agent loop with OV plugin in the contextEngine slot.
+
+    The OC backend logic (ingest/answer) is identical to the existing
+    OpenClawBackend; this class wraps it with row-specific config + extra
+    publishability evidence collected by the pipeline.
+    """
+
+    backend_id: str
+    base_url: str
+    token: str
+    agent: str
+    memory_core_enabled: bool
+    context_engine_slot: str
+    openviking_server_base_url: str
+    openviking_agent_prefix: str
+    answer_model: str
+    backend_kind: str = "openclaw"
+    answer_mode: str = "openclaw-ov-plugin"
+
+    # Live-config-observed values (populated by the pipeline pre-run).
+    observed_context_engine_slot: str | None = None
+    observed_memory_core_enabled: bool | None = None
+    observed_plugin_version: str | None = None
+    observed_plugin_source: str | None = None
+    observed_server_version: str | None = None
+    observed_server_auth_mode: str | None = None
+
+    # Publishability evidence (populated by the pipeline as gates run).
+    pre_flight_failures: list[str] = field(default_factory=list)
+    isolation_gate_failures: list[str] = field(default_factory=list)
+    pre_run_empty_scope_failures: list[str] = field(default_factory=list)
+    write_verification_failures: list[str] = field(default_factory=list)
+    runtime_evidence_failures: list[str] = field(default_factory=list)
+    cross_scope_isolation_failures: list[str] = field(default_factory=list)
+    config_drift_failures: list[str] = field(default_factory=list)
+
+    def ingest(self, user: str, message: str, agent: str | None = None) -> tuple[str, dict]:
+        return send_message_with_retry(
+            self.base_url, self.token, user, message, agent=agent or self.agent,
+        )
+
+    def answer(self, user: str, question: str, agent: str | None = None) -> tuple[str, dict]:
+        return send_message_with_retry(
+            self.base_url, self.token, user, question, agent=agent or self.agent,
+        )
+
+    def manifest_config(self) -> dict:
+        return {
+            "backend_id": self.backend_id,
+            "backend_kind": self.backend_kind,
+            "answer_mode": self.answer_mode,
+            "agent": self.agent,
+            "answer_model": self.answer_model,
+            "memory_core_enabled_expected": self.memory_core_enabled,
+            "memory_core_enabled_observed": self.observed_memory_core_enabled,
+            "context_engine_slot_expected": self.context_engine_slot,
+            "context_engine_slot_observed": self.observed_context_engine_slot,
+            "openclaw_ov_plugin_version": self.observed_plugin_version,
+            "openclaw_ov_plugin_source": self.observed_plugin_source,
+            "openviking_server_base_url": self.openviking_server_base_url,
+            "openviking_server_version": self.observed_server_version,
+            "openviking_server_auth_mode": self.observed_server_auth_mode,
+            "openviking_agent_prefix": self.openviking_agent_prefix,
+            "ov_scope_pattern": f"{self.openviking_agent_prefix}_<openclaw_agent_id>",
+            "pre_flight_verified": not self.pre_flight_failures,
+            "pre_flight_failures": self.pre_flight_failures,
+            "isolation_gate_verified": not self.isolation_gate_failures,
+            "isolation_gate_failures": self.isolation_gate_failures,
+            "pre_run_empty_scope_verified": not self.pre_run_empty_scope_failures,
+            "pre_run_empty_scope_failures": self.pre_run_empty_scope_failures,
+            "write_verification_verified": not self.write_verification_failures,
+            "write_verification_failures": self.write_verification_failures,
+            "runtime_evidence_verified": not self.runtime_evidence_failures,
+            "runtime_evidence_failures": self.runtime_evidence_failures,
+            "cross_scope_isolation_verified": not self.cross_scope_isolation_failures,
+            "cross_scope_isolation_failures": self.cross_scope_isolation_failures,
+            "config_drift_verified": not self.config_drift_failures,
+            "config_drift_failures": self.config_drift_failures,
+            "comparison_class": self.comparison_class(),
+        }
+
+    def comparison_class(self) -> str:
+        """Compute the comparison class from observed values, not flags."""
+        # Exact reproduction requires OV server 0.1.18 AND answer model
+        # seed-2.0-code AND matched judge. We don't have any of those locally.
+        if self.observed_server_version == "0.1.18" and self.answer_model == "byteplus/seed-2.0-code":
+            return "exact_reproduction_pending_judge"
+        if self.answer_model not in {"byteplus/seed-2.0-code", "seed-2.0-code"}:
+            return "approximation"
+        return "directional_rerun"
+
+    def publishability_failures(self) -> list[str]:
+        failures: list[str] = []
+        failures.extend([f"pre-flight: {x}" for x in self.pre_flight_failures])
+        failures.extend([f"isolation gate: {x}" for x in self.isolation_gate_failures])
+        failures.extend([f"empty-scope: {x}" for x in self.pre_run_empty_scope_failures])
+        failures.extend([f"write verification: {x}" for x in self.write_verification_failures])
+        failures.extend([f"runtime evidence: {x}" for x in self.runtime_evidence_failures])
+        failures.extend([f"cross-scope isolation: {x}" for x in self.cross_scope_isolation_failures])
+        failures.extend([f"config drift: {x}" for x in self.config_drift_failures])
+        return failures
+
+
 def build_backend(backend_id: str, args) -> MemoryBackend:
     if backend_id == "oo-builtin":
         actual_backend, backend_failures = read_and_verify_openclaw_memory_backend(
@@ -309,7 +460,39 @@ def build_backend(backend_id: str, args) -> MemoryBackend:
             account=getattr(args, "openviking_account", None),
             agent_id=getattr(args, "openviking_agent_id", "eval-locomo-openviking"),
         )
+    if backend_id in OPENCLAW_OV_PLUGIN_ROW_MATRIX:
+        row = OPENCLAW_OV_PLUGIN_ROW_MATRIX[backend_id]
+        if row["requires_hybrid_flag"] and not getattr(args, "allow_unverified_hybrid_row", False):
+            raise SystemExit(
+                f"Backend {backend_id} requires --allow-unverified-hybrid-row "
+                "until O4 in docs/design/openviking-memory-eval-plan.md resolves "
+                "(published +memory-core tool surface unknown)."
+            )
+        return OpenClawOVPluginBackend(
+            backend_id=backend_id,
+            base_url=args.base_url,
+            token=args.token,
+            agent=_resolve_row_agent(args, backend_id),
+            memory_core_enabled=row["memory_core_enabled"],
+            context_engine_slot=row["context_engine_slot"],
+            openviking_server_base_url=getattr(
+                args, "openviking_server_base_url", "http://127.0.0.1:1933",
+            ),
+            openviking_agent_prefix=getattr(
+                args, "openviking_agent_prefix", "eval-locomo-ov",
+            ),
+            answer_model=getattr(args, "answer_model", "deepseek/deepseek-v4-flash"),
+        )
     raise ValueError(f"unknown backend: {backend_id}")
+
+
+def _resolve_row_agent(args, backend_id: str) -> str:
+    """Pick the per-row base agent name from --row-agent mapping or fallback."""
+    row_map: dict = getattr(args, "row_agent_map", None) or {}
+    if backend_id in row_map:
+        return row_map[backend_id]
+    # Fallback default — explicit, manifest-checkable.
+    return f"eval-locomo-ov-{backend_id.removeprefix('oc-ov-plugin-')}"
 
 
 def backend_run_dir(run_group: str, backend_id: str) -> Path:

@@ -57,7 +57,30 @@ from lib.artifacts import (
     write_manifest,
 )
 from lib.agent_provision import ensure_sample_agent, provision_sample_agents
-from lib.backends import EXPECTED_OPENCLAW_MEMORY_BACKENDS, backend_run_dir, build_backend
+from lib.backends import (
+    EXPECTED_OPENCLAW_MEMORY_BACKENDS,
+    OPENCLAW_OV_PLUGIN_ROW_MATRIX,
+    OpenClawOVPluginBackend,
+    backend_run_dir,
+    build_backend,
+)
+from lib.openclaw_plugin import (
+    assert_answer_model_reachable,
+    assert_openviking_plugin_loaded,
+)
+from lib.openclaw_profile import (
+    read_profile_config,
+    restart_gateway,
+    set_profile_config,
+    snapshot_profile_keys,
+    wait_gateway_ready,
+)
+from lib.openviking_verify import (
+    probe_positive_recall,
+    probe_session_exists,
+    verify_runtime_ov_evidence,
+    verify_strict_openviking_scope_isolation,
+)
 from lib.judge_util import grade_answers, grade_answers_incremental, load_answers
 from lib.locomo import (
     build_session_messages,
@@ -268,8 +291,23 @@ def _openclaw_json(profile: str, *args: str) -> object:
     return json.loads(result.stdout)
 
 
-def verify_strict_eval_isolation(profile: str, agent: str) -> dict:
-    """Verify eval profile exposes only builtin memory tools and no skills."""
+def verify_strict_eval_isolation(
+    profile: str,
+    agent: str,
+    expected_allow: set | None = None,
+    expected_extra_deny: set | None = None,
+) -> dict:
+    """Verify eval profile exposes only the expected tool surface.
+
+    Default `expected_allow` is `STRICT_MEMORY_TOOLS` (the OC builtin baseline).
+    OV plugin rows pass a row-specific allowlist from
+    `OPENCLAW_OV_PLUGIN_ROW_MATRIX`. `expected_extra_deny` lets OV rows add
+    `add_resource`/`add_skill` to the required-deny set so the model cannot
+    widen scope mid-eval.
+    """
+    expected_allow = expected_allow if expected_allow is not None else STRICT_MEMORY_TOOLS
+    expected_extra_deny = expected_extra_deny or set()
+
     tools_allow = _openclaw_json(profile, "config", "get", "tools.allow", "--json")
     tools_deny = _openclaw_json(profile, "config", "get", "tools.deny", "--json")
     elevated_enabled = _openclaw_json(profile, "config", "get", "tools.elevated.enabled", "--json")
@@ -280,12 +318,14 @@ def verify_strict_eval_isolation(profile: str, agent: str) -> dict:
     model_visible = skills.get("modelVisible", []) if isinstance(skills, dict) else []
     command_visible = skills.get("commandVisible", []) if isinstance(skills, dict) else []
 
+    required_deny = STRICT_FORBIDDEN_TOOLS | expected_extra_deny
+
     failures = []
-    if allow_set != STRICT_MEMORY_TOOLS:
-        failures.append(f"tools.allow must be exactly {sorted(STRICT_MEMORY_TOOLS)}, got {sorted(allow_set)}")
-    missing_denies = sorted(STRICT_FORBIDDEN_TOOLS - deny_set)
+    if allow_set != expected_allow:
+        failures.append(f"tools.allow must be exactly {sorted(expected_allow)}, got {sorted(allow_set)}")
+    missing_denies = sorted(required_deny - deny_set)
     if missing_denies:
-        failures.append(f"tools.deny missing forbidden tools: {missing_denies}")
+        failures.append(f"tools.deny missing required tools: {missing_denies}")
     if elevated_enabled is not False:
         failures.append(f"tools.elevated.enabled must be false, got {elevated_enabled!r}")
     if model_visible:
@@ -298,7 +338,8 @@ def verify_strict_eval_isolation(profile: str, agent: str) -> dict:
         "profile": profile,
         "agent": agent,
         "tools_allow": sorted(allow_set),
-        "forbidden_tools_denied": sorted(STRICT_FORBIDDEN_TOOLS & deny_set),
+        "expected_allow": sorted(expected_allow),
+        "forbidden_tools_denied": sorted(required_deny & deny_set),
         "missing_forbidden_denies": missing_denies,
         "elevated_enabled": elevated_enabled,
         "model_visible": model_visible,
@@ -307,8 +348,16 @@ def verify_strict_eval_isolation(profile: str, agent: str) -> dict:
     }
 
 
-def enforce_strict_eval_isolation(args: argparse.Namespace) -> dict:
-    report = verify_strict_eval_isolation(args.openclaw_profile, args.agent)
+def enforce_strict_eval_isolation(
+    args: argparse.Namespace,
+    expected_allow: set | None = None,
+    expected_extra_deny: set | None = None,
+) -> dict:
+    report = verify_strict_eval_isolation(
+        args.openclaw_profile, args.agent,
+        expected_allow=expected_allow,
+        expected_extra_deny=expected_extra_deny,
+    )
     if not report["ok"]:
         print("Strict eval isolation check failed:", file=sys.stderr)
         for failure in report["failures"]:
@@ -317,26 +366,45 @@ def enforce_strict_eval_isolation(args: argparse.Namespace) -> dict:
     return report
 
 
-def strict_isolation_agents_for_args(args: argparse.Namespace) -> list[str]:
+def _backend_isolation_expectations(backend_id: str) -> tuple[set | None, set | None]:
+    """Per-backend (expected_allow, expected_extra_deny) for the strict gate."""
+    from lib.backends import OPENCLAW_OV_PLUGIN_ROW_MATRIX
+    if backend_id in OPENCLAW_OV_PLUGIN_ROW_MATRIX:
+        row = OPENCLAW_OV_PLUGIN_ROW_MATRIX[backend_id]
+        return set(row["tools_allow"]), set(row["tools_deny_required"])
+    return None, None  # fall back to STRICT_MEMORY_TOOLS default
+
+
+def strict_isolation_agents_for_args(args: argparse.Namespace) -> list[tuple[str, str]]:
+    """Return list of (backend_id, agent_id) pairs to gate, in run order."""
     if args.mode != "eval":
-        return [args.agent]
-    agents = []
+        return [(getattr(args, "backend_id", "oo-builtin"), args.agent)]
+    from lib.backends import OPENCLAW_OV_PLUGIN_ROW_MATRIX, _resolve_row_agent
+    pairs: list[tuple[str, str]] = []
     backends = [item.strip() for item in args.backends.split(",") if item.strip()]
     if "oo-builtin" in backends:
-        agents.append(args.builtin_agent)
+        pairs.append(("oo-builtin", args.builtin_agent))
     if "oo-builtin-vector" in backends:
-        agents.append(args.builtin_vector_agent)
+        pairs.append(("oo-builtin-vector", args.builtin_vector_agent))
     if "oo-qmd" in backends:
-        agents.append(args.qmd_agent)
-    return agents or [args.agent]
+        pairs.append(("oo-qmd", args.qmd_agent))
+    for backend_id in backends:
+        if backend_id in OPENCLAW_OV_PLUGIN_ROW_MATRIX:
+            pairs.append((backend_id, _resolve_row_agent(args, backend_id)))
+    return pairs or [("oo-builtin", args.agent)]
 
 
 def enforce_strict_eval_isolation_for_args(args: argparse.Namespace) -> list[dict]:
     reports = []
-    for agent in strict_isolation_agents_for_args(args):
+    for backend_id, agent in strict_isolation_agents_for_args(args):
         check_args = copy.copy(args)
         check_args.agent = agent
-        reports.append(enforce_strict_eval_isolation(check_args))
+        expected_allow, expected_extra_deny = _backend_isolation_expectations(backend_id)
+        reports.append(enforce_strict_eval_isolation(
+            check_args,
+            expected_allow=expected_allow,
+            expected_extra_deny=expected_extra_deny,
+        ))
     return reports
 
 
@@ -1284,9 +1352,181 @@ def run_pipeline(args: argparse.Namespace) -> None:
         ))
 
 
+_OV_PLUGIN_PROFILE_KEYS = (
+    "plugins.slots.contextEngine",
+    "plugins.entries.memory-core.enabled",
+    "plugins.entries.openviking.enabled",
+    "tools.allow",
+    "tools.deny",
+)
+
+
+def _apply_ov_plugin_row_config(
+    profile: str, backend_id: str, base_url: str,
+) -> dict:
+    """Set the row's expected config + restart + wait for gateway ready.
+
+    Mutates: contextEngine slot, memory-core.enabled, openviking.enabled,
+    tools.allow (per-row), tools.deny (existing ∪ row extras).
+
+    Codex flagged that `tools.allow` widening was required for OV plugin
+    tools to actually reach the model; the smoke run confirmed: with the
+    default OC allowlist, the agent uses `write`/`edit` to write markdown
+    files instead of calling OV plugin tools at all.
+    """
+    row = OPENCLAW_OV_PLUGIN_ROW_MATRIX[backend_id]
+    set_profile_config(profile, "plugins.slots.contextEngine", row["context_engine_slot"])
+    set_profile_config(profile, "plugins.entries.memory-core.enabled", row["memory_core_enabled"])
+    set_profile_config(profile, "plugins.entries.openviking.enabled", True)
+    set_profile_config(profile, "tools.allow", list(row["tools_allow"]))
+
+    current_deny = read_profile_config(profile, "tools.deny")
+    if not isinstance(current_deny, list):
+        current_deny = []
+    extra_deny = set(row["tools_deny_required"])
+    if not set(current_deny).issuperset(extra_deny):
+        set_profile_config(
+            profile, "tools.deny", sorted(set(current_deny) | extra_deny),
+        )
+
+    restart_gateway(profile)
+    readiness = wait_gateway_ready(profile, base_url, timeout_s=30.0)
+    observed = {key: read_profile_config(profile, key) for key in _OV_PLUGIN_PROFILE_KEYS}
+    return {"readiness": readiness, "observed": observed}
+
+
+def _populate_ov_backend_observed(
+    backend: OpenClawOVPluginBackend, profile: str,
+) -> None:
+    """Read live values for fields the manifest records as observed."""
+    try:
+        backend.observed_context_engine_slot = read_profile_config(
+            profile, "plugins.slots.contextEngine",
+        )
+    except Exception as exc:
+        backend.config_drift_failures.append(f"read contextEngine slot: {exc}")
+    try:
+        backend.observed_memory_core_enabled = read_profile_config(
+            profile, "plugins.entries.memory-core.enabled",
+        )
+    except Exception as exc:
+        backend.config_drift_failures.append(f"read memory-core.enabled: {exc}")
+
+    # Plugin version + source from `openclaw plugins inspect openviking`.
+    inspect = subprocess.run(
+        [shutil.which("openclaw") or "openclaw", "--profile", profile,
+         "plugins", "inspect", "openviking"],
+        capture_output=True, text=True, check=False,
+    )
+    text = (inspect.stdout or "") + (inspect.stderr or "")
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Version:"):
+            backend.observed_plugin_version = stripped.split("Version:", 1)[1].strip()
+        elif stripped.startswith("Source:"):
+            backend.observed_plugin_source = stripped.split("Source:", 1)[1].strip()
+
+    # OV server version + auth mode via local health endpoint.
+    try:
+        import urllib.request
+        health_url = backend.openviking_server_base_url.rstrip("/") + "/health"
+        with urllib.request.urlopen(health_url, timeout=3.0) as resp:
+            health = json.loads(resp.read().decode("utf-8"))
+        backend.observed_server_version = health.get("version")
+        backend.observed_server_auth_mode = health.get("auth_mode")
+    except Exception as exc:
+        backend.config_drift_failures.append(f"ov server health: {exc}")
+
+
+def _ov_scope_agent_id(prefix: str, oc_agent_id: str) -> str:
+    """Mirror the OV plugin's '<prefix>_<ctx.agentId>' formula (sanitised)."""
+    sanitised = "".join(ch if (ch.isalnum() or ch in "_-") else "_" for ch in oc_agent_id)
+    return f"{prefix}_{sanitised}"
+
+
+def _ov_plugin_pre_run_empty_scope_check(
+    backend: OpenClawOVPluginBackend, sample_ids: list[str],
+) -> None:
+    """Each sample's OV scope must be empty before ingest. Codex-mandated gate."""
+    for sample_id in sample_ids:
+        oc_agent = f"{backend.agent}-{sample_id}" if "-" not in backend.agent.split("-")[-1] else f"{backend.agent}-{sample_id}"
+        ov_agent = _ov_scope_agent_id(backend.openviking_agent_prefix, oc_agent)
+        user = default_sample_user(sample_id)
+        try:
+            result = probe_session_exists(account=None, ov_agent_id=ov_agent, user=user)
+        except Exception as exc:
+            backend.pre_run_empty_scope_failures.append(
+                f"sample {sample_id}: probe failed ({exc})"
+            )
+            continue
+        if result["write_detected"]:
+            backend.pre_run_empty_scope_failures.append(
+                f"sample {sample_id}: OV scope {ov_agent} has {result['sessions_count']} "
+                "pre-existing session(s) — pick a fresh --row-agent or --openviking-agent-prefix."
+            )
+
+
+def _ov_plugin_post_ingest_verification(
+    backend: OpenClawOVPluginBackend, sample_ids: list[str], run_dir: Path,
+) -> None:
+    """Write OV-shaped memory_write_verification.json + record failures."""
+    samples_evidence = []
+    all_detected = True
+    for sample_id in sample_ids:
+        oc_agent = f"{backend.agent}-{sample_id}"
+        ov_agent = _ov_scope_agent_id(backend.openviking_agent_prefix, oc_agent)
+        user = default_sample_user(sample_id)
+        existence = probe_session_exists(account=None, ov_agent_id=ov_agent, user=user)
+        # Positive recall using a generic but content-derived canary token.
+        # We probe with the sample_id itself — the agent's stored summary
+        # often references the sample identifier or the speaker names; this
+        # is a best-effort cheap probe per codex's "session count is weak"
+        # critique.
+        recall = probe_positive_recall(
+            account=None, ov_agent_id=ov_agent, user=user,
+            canary_text=sample_id, node_limit=3,
+        )
+        write_detected = existence["write_detected"]
+        samples_evidence.append({
+            "sample_id": sample_id,
+            "user": user,
+            "ov_agent_id": ov_agent,
+            "write_detected": write_detected,
+            "sessions_count": existence["sessions_count"],
+            "recall_hit": recall["recall_hit"],
+            "recall_hit_count": recall["hit_count"],
+        })
+        if not write_detected:
+            all_detected = False
+            backend.write_verification_failures.append(
+                f"sample {sample_id} ov_agent={ov_agent}: zero sessions"
+            )
+    payload = {
+        "status": "ok" if samples_evidence else "not_configured",
+        "invariant_held": all_detected and bool(samples_evidence),
+        "invariant_rule": "all",
+        "verifier": "openviking_verify",
+        "samples": samples_evidence,
+    }
+    write_json(run_dir / "memory_write_verification.json", payload)
+
+
 def _collect_one_backend(args: argparse.Namespace, backend_id: str, group_dir: Path) -> None:
     """Run ingest + QA for a single backend."""
+    is_ov_plugin = backend_id in OPENCLAW_OV_PLUGIN_ROW_MATRIX
+
     backend = build_backend(backend_id, args)
+
+    # OV plugin rows: pre-flight gates run BEFORE setup_failures gathering so
+    # they end up in the same publishability_failures list.
+    if is_ov_plugin and isinstance(backend, OpenClawOVPluginBackend):
+        plugin_gate = assert_openviking_plugin_loaded(args.openclaw_profile)
+        backend.pre_flight_failures.extend(plugin_gate.failures)
+        model_gate = assert_answer_model_reachable(
+            args.openclaw_profile, backend.answer_model,
+        )
+        backend.pre_flight_failures.extend(model_gate.failures)
+
     setup_failures = (
         backend.publishability_failures()
         if hasattr(backend, "publishability_failures")
@@ -1309,6 +1549,94 @@ def _collect_one_backend(args: argparse.Namespace, backend_id: str, group_dir: P
 
     if backend.backend_kind == "openviking":
         run_args.viking = True
+
+    # OV plugin path: orchestrate per-row config + verification around the
+    # existing ingest/QA pipeline. Profile keys are snapshotted and restored
+    # in the finally block even when ingest/QA raises.
+    if is_ov_plugin and isinstance(backend, OpenClawOVPluginBackend):
+        with snapshot_profile_keys(args.openclaw_profile, list(_OV_PLUGIN_PROFILE_KEYS)):
+            apply_result = _apply_ov_plugin_row_config(
+                args.openclaw_profile, backend_id, args.base_url,
+            )
+            readiness = apply_result["readiness"]
+            if not readiness["ready"]:
+                backend.config_drift_failures.append(
+                    f"gateway not ready after restart (elapsed {readiness['elapsed_s']}s)"
+                )
+            observed = apply_result["observed"]
+            # Codex-mandated assert: observed value matches expected
+            row = OPENCLAW_OV_PLUGIN_ROW_MATRIX[backend_id]
+            if observed["plugins.slots.contextEngine"] != row["context_engine_slot"]:
+                backend.config_drift_failures.append(
+                    f"contextEngine slot drift: expected {row['context_engine_slot']!r} "
+                    f"got {observed['plugins.slots.contextEngine']!r}"
+                )
+            if observed["plugins.entries.memory-core.enabled"] != row["memory_core_enabled"]:
+                backend.config_drift_failures.append(
+                    f"memory-core.enabled drift: expected {row['memory_core_enabled']!r} "
+                    f"got {observed['plugins.entries.memory-core.enabled']!r}"
+                )
+            _populate_ov_backend_observed(backend, args.openclaw_profile)
+
+            # Pre-run empty-scope assertion before any ingest.
+            samples = load_locomo_data(run_args.input, run_args.sample)
+            sample_ids = [item["sample_id"] for item in samples]
+            _ov_plugin_pre_run_empty_scope_check(backend, sample_ids)
+            if backend.pre_run_empty_scope_failures and not args.allow_non_publishable:
+                raise SystemExit(
+                    f"Backend {backend_id} pre-run empty-scope check failed: "
+                    f"{'; '.join(backend.pre_run_empty_scope_failures[:5])}"
+                )
+
+            print(f"\n=== Backend {backend_id}: ingest ===", file=sys.stderr)
+            run_ingest(run_args)
+
+            _ov_plugin_post_ingest_verification(
+                backend, sample_ids, Path(run_args.run_dir),
+            )
+            if backend.write_verification_failures and not args.allow_non_publishable:
+                raise SystemExit(
+                    f"Backend {backend_id} OV write verification failed: "
+                    f"{'; '.join(backend.write_verification_failures[:5])}"
+                )
+
+            print(f"\n=== Backend {backend_id}: qa ===", file=sys.stderr)
+            run_qa(run_args)
+
+            # Runtime evidence: scan OC agent transcripts for OV evidence.
+            sample_agent_ids = [
+                _resolve_sample_agent(run_args, sid)[0] for sid in sample_ids
+            ]
+            evidence = verify_runtime_ov_evidence(
+                _openclaw_home_path(run_args), sample_agent_ids,
+            )
+            backend.runtime_evidence_failures.extend(evidence["failures"])
+            write_json(
+                Path(run_args.run_dir) / "openviking_runtime_evidence.json",
+                evidence,
+            )
+
+            # Cross-scope isolation probe.
+            ov_agent_ids = [
+                _ov_scope_agent_id(backend.openviking_agent_prefix, oc_id)
+                for oc_id in sample_agent_ids
+            ]
+            users = [default_sample_user(sid) for sid in sample_ids]
+            cross = verify_strict_openviking_scope_isolation(
+                account=None, ov_agent_ids=ov_agent_ids, sample_users=users,
+            )
+            backend.cross_scope_isolation_failures.extend(cross["failures"])
+            write_json(
+                Path(run_args.run_dir) / "openviking_cross_scope_isolation.json",
+                cross,
+            )
+
+            # Re-emit manifest now that the backend object has all observed
+            # values; this overwrites the manifest written during run_ingest.
+            samples_for_manifest = load_locomo_data(run_args.input, run_args.sample)
+            _write_run_manifest(run_args, samples_for_manifest, backend.manifest_config())
+
+            return  # exit the snapshot context, which restores profile state
 
     print(f"\n=== Backend {backend_id}: ingest ===", file=sys.stderr)
     run_ingest(run_args)
@@ -1596,6 +1924,31 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         "--skip-strict-isolation-check", action="store_true", default=False,
         help="Skip eval-profile tool/skill isolation gate",
     )
+    # OpenViking plugin (context-engine) row flags.
+    parser.add_argument(
+        "--openviking-server-base-url", default="http://127.0.0.1:1933",
+        help="URL the OpenClaw OV plugin will speak to (default http://127.0.0.1:1933)",
+    )
+    parser.add_argument(
+        "--openviking-agent-prefix", default="eval-locomo-ov",
+        help="Prefix the OV plugin uses to derive `<prefix>_<oc_agent_id>` scopes",
+    )
+    parser.add_argument(
+        "--answer-model", default="deepseek/deepseek-v4-flash",
+        help="Answer model id (e.g. deepseek/deepseek-v4-flash or byteplus/seed-2.0-code). "
+             "Determines `comparison_class` in the OV plugin manifest.",
+    )
+    parser.add_argument(
+        "--row-agent", action="append", default=None, metavar="ROW_ID=AGENT",
+        help="Explicit per-row OC agent name, e.g. "
+             "`--row-agent oc-ov-plugin-bare=eval-locomo-ov-bare-20260520`. "
+             "Replaces the legacy --builtin-agent reuse for new rows. May repeat.",
+    )
+    parser.add_argument(
+        "--allow-unverified-hybrid-row", action="store_true", default=False,
+        help="Permit oc-ov-plugin-augmented to run (its tool surface is unverified "
+             "against the published +memory-core row; see plan O4).",
+    )
 
 
 def main() -> None:
@@ -1658,6 +2011,16 @@ def main() -> None:
     isolation_parser.add_argument("--json", action="store_true", default=False, help="Output JSON report")
 
     args = parser.parse_args()
+
+    # Parse --row-agent KEY=VALUE pairs into a dict that build_backend reads.
+    row_agent_map: dict[str, str] = {}
+    for pair in getattr(args, "row_agent", None) or []:
+        if "=" not in pair:
+            print(f"--row-agent must be KEY=VALUE, got {pair!r}", file=sys.stderr)
+            sys.exit(2)
+        key, value = pair.split("=", 1)
+        row_agent_map[key.strip()] = value.strip()
+    args.row_agent_map = row_agent_map
 
     if args.mode == "judge":
         asyncio.run(run_judge_async(
