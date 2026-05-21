@@ -13,7 +13,7 @@ retrieval disabled.
 
 - **Condition A** — already-verified vector run: agent
   `eval-locomo-builtin-vector-full-20260518-223504`, run dir
-  `output/runs/builtin-vector-full-20260518-223504/oo-builtin-vector/`,
+  `output/runs/builtin-vector-full-20260518-223504/oc-builtin-vector/`,
   `memorySearch` configured as `provider=ollama`,
   `model=qwen3-embedding:0.6b`, `store.vector.enabled=true`,
   hybrid weights 0.8 / 0.2.
@@ -61,8 +61,8 @@ shared written-memory snapshot is what dominates.
 
 | Condition | Retrieval | Score | Run dir |
 |---|---|---:|---|
-| A | builtin hybrid (vector on) | 1183 / 1986 = 59.57% | `output/runs/builtin-vector-full-20260518-223504/oo-builtin-vector/` |
-| B | builtin no-vector (FTS only) | 1171 / 1986 = 58.96% | `output/runs/retrieval-ablation-builtin-from-vector-20260519-125509/oo-builtin/` |
+| A | builtin hybrid (vector on) | 1183 / 1986 = 59.57% | `output/runs/builtin-vector-full-20260518-223504/oc-builtin-vector/` |
+| B | builtin no-vector (FTS only) | 1171 / 1986 = 58.96% | `output/runs/retrieval-ablation-builtin-from-vector-20260519-125509/oc-builtin/` |
 
 ## Paired comparison (A = vector, B = no-vector)
 
@@ -123,7 +123,7 @@ refusal of false-premise questions rather than recall.
    `provider=ollama` / `model=qwen3-embedding:0.6b` strings stay in
    `details` because they are the *configured* embedding metadata,
    which OpenClaw echoes regardless of whether vector retrieval
-   engages. Comparing with a known-good `oo-builtin` baseline at the
+   engages. Comparing with a known-good `oc-builtin` baseline at the
    same OpenClaw version confirmed the strings persist in true
    no-vector runs.
 
@@ -177,7 +177,7 @@ agents without explicit instruction):
    - `output/runs/retrieval-ablation-builtin-from-vector-20260519-125509/`
      `clone-manifest.json`, `paired-comparison.json`,
      `paired-comparison.md`,
-     `oo-builtin/{manifest,answers,qa.jsonl,judge_grades}.json` (+ logs).
+     `oc-builtin/{manifest,answers,qa.jsonl,judge_grades}.json` (+ logs).
    - `smoke/` and `smoke2/` carry the early runtime-evidence probes.
 
 ## Tokens (condition B run)
@@ -213,9 +213,9 @@ openclaw --profile eval gateway restart
 # Clone condition A memory snapshot
 TS=$(date +%Y%m%d-%H%M%S)
 RUN_DIR=output/runs/retrieval-ablation-builtin-from-vector-$TS
-mkdir -p $RUN_DIR/oo-builtin
+mkdir -p $RUN_DIR/oc-builtin
 PYTHONPATH=. uv run python scripts/retrieval_ablation.py clone \
-  output/runs/builtin-vector-full-20260518-223504/oo-builtin-vector \
+  output/runs/builtin-vector-full-20260518-223504/oc-builtin-vector \
   --timestamp $TS \
   --dest-base-agent "eval-locomo-ret-ablation-$TS" \
   --dest-base-workspace "$HOME/.openclaw-eval/workspace-ret-ablation-$TS" \
@@ -228,20 +228,20 @@ PYTHONPATH=. uv run python main.py qa locomo10.json \
   --agent "eval-locomo-ret-ablation-$TS" \
   --agent-workspace "$HOME/.openclaw-eval/workspace-ret-ablation-$TS" \
   --openclaw-home "$HOME/.openclaw-eval" \
-  --run-dir "$RUN_DIR/oo-builtin" \
+  --run-dir "$RUN_DIR/oc-builtin" \
   --include-categories 1,2,3,4,5 \
   --qa-parallel 10
 PYTHONPATH=. uv run python main.py judge \
-  "$RUN_DIR/oo-builtin/answers.json" \
-  --output "$RUN_DIR/oo-builtin/judge_grades.json" \
+  "$RUN_DIR/oc-builtin/answers.json" \
+  --output "$RUN_DIR/oc-builtin/judge_grades.json" \
   --model deepseek-v4-flash \
   --base-url https://api.deepseek.com/v1 \
   --token "$DEEPSEEK_API_KEY" --parallel 16
 
 # Paired comparison + restore
 PYTHONPATH=. uv run python scripts/retrieval_ablation.py compare \
-  output/runs/builtin-vector-full-20260518-223504/oo-builtin-vector/judge_grades.json \
-  "$RUN_DIR/oo-builtin/judge_grades.json" \
+  output/runs/builtin-vector-full-20260518-223504/oc-builtin-vector/judge_grades.json \
+  "$RUN_DIR/oc-builtin/judge_grades.json" \
   --label-a vector --label-b no-vector \
   --output "$RUN_DIR/paired-comparison.json" \
   --markdown "$RUN_DIR/paired-comparison.md"

@@ -39,12 +39,12 @@ Comparison run:
 ```bash
 uv run eval.py compare ./locomo10.json \
   --run-group output/runs/locomo-memory-comparison-001 \
-  --backends oo-builtin,oo-qmd,openviking \
+  --backends oc-builtin,oo-qmd,openviking \
   --include-categories 1,2,3,4,5 \
   --allow-non-publishable
 ```
 
-`oo-builtin` is the baseline. `oo-qmd` is the OpenClaw QMD variant. `openviking` is a separate adapter that writes memory with `ov add-memory`, retrieves with `ov search`, and records the answer mode as `openviking-search-rag`.
+`oc-builtin` is the baseline. `oo-qmd` is the OpenClaw QMD variant. `openviking` is a separate adapter that writes memory with `ov add-memory`, retrieves with `ov search`, and records the answer mode as `openviking-search-rag`.
 
 For primary comparison runs, QMD extra paths and session transcript indexing should be disabled unless the run is intentionally labeled as an ablation.
 

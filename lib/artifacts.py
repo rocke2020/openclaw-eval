@@ -107,7 +107,7 @@ def build_manifest(args, samples: list[dict], stats: dict, backend_config: dict 
     manifest = {
         "run_id": run_dir_name,
         "run_group_id": getattr(args, "run_group_id", None),
-        "backend_id": getattr(args, "backend_id", "oo-builtin"),
+        "backend_id": getattr(args, "backend_id", "oc-builtin"),
         "backend_kind": getattr(args, "backend_kind", "openclaw"),
         "backend_config": backend_config or {},
         "created_at": created_at_utc(),
@@ -127,7 +127,9 @@ def build_manifest(args, samples: list[dict], stats: dict, backend_config: dict 
         "openviking_account": getattr(args, "openviking_account", None),
         "openviking_user": getattr(args, "openviking_user", None),
         "openviking_agent_id": getattr(args, "openviking_agent_id", None),
-        "user_policy": "per-sample default" if not getattr(args, "user", None) else "explicit",
+        "user_policy": "per-sample default"
+        if not getattr(args, "user", None)
+        else "explicit",
         "category_policy": {
             "include_categories": getattr(args, "include_categories", None),
             "exclude_categories": getattr(args, "exclude_categories", None),
@@ -263,7 +265,10 @@ def render_report_html(
 def render_comparison_report_html(group_manifest: dict, backend_summaries: list[dict]) -> str:
     ordered = sorted(
         backend_summaries,
-        key=lambda item: (0 if item.get("backend_id") == "oo-builtin" else 1, item.get("backend_id", "")),
+        key=lambda item: (
+            0 if item.get("backend_id") == "oc-builtin" else 1,
+            item.get("backend_id", ""),
+        ),
     )
     rows = []
     for summary in ordered:

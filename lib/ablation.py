@@ -2,7 +2,7 @@
 
 Supports the experiment described in
 `docs/eval-journal/2026-05-19-retrieval-only-ablation-results.md`:
-given a source `oo-builtin-vector` run, clone its written-memory snapshot
+given a source `oc-builtin-vector` run, clone its written-memory snapshot
 into fresh per-sample workspaces so a no-vector QA-only run can isolate
 the retrieval method as the only varying factor.
 """
@@ -14,7 +14,6 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from lib.artifacts import sha256_file
-
 
 # Files that must be present in a memory-bearing OpenClaw workspace and
 # whose contents define condition A's written memory.
@@ -414,8 +413,8 @@ def render_paired_summary_markdown(
     """Render a Markdown table summarizing paired_buckets output."""
     buckets = result.get("buckets", {})
     lines = [
-        f"| Pair bucket | Count |",
-        f"|---|---:|",
+        "| Pair bucket | Count |",
+        "|---|---:|",
         f"| Both correct | {buckets.get('both_correct', 0)} |",
         f"| {label_a}-only correct | {buckets.get('a_only_correct', 0)} |",
         f"| {label_b}-only correct | {buckets.get('b_only_correct', 0)} |",

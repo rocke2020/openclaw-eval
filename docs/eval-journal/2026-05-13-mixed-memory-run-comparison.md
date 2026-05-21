@@ -133,6 +133,6 @@ Codex also caught: **B's `2023-06-16.md` records the wrong sample's conversation
 
 - Harness fixes: `lib/backends.py` (forward `agent` override, `d525884`); `main.py` (per-sample isolation is the only mode, `da1a507`).
 - Run principles: `.codex/skills/full-eval-run/references/full-eval-run-principles.md`.
-- A artifacts: `output/runs/builtin-memory-full-20260512-225733/oo-builtin/`.
-- B artifacts: `output/runs/builtin-memory-full-20260513-111321/oo-builtin/` (`memory_write_verification.json` shows `write_detected: false` for every sample — the loud invalidation signal).
-- C artifacts: `output/runs/builtin-memory-full-20260513-222431/oo-builtin/` (`memory_write_verification.invariant_held: true`, rule `"all"`, all 10 per-sample workspaces populated).
+- A artifacts: `output/runs/builtin-memory-full-20260512-225733/oc-builtin/`.
+- B artifacts: `output/runs/builtin-memory-full-20260513-111321/oc-builtin/` (`memory_write_verification.json` shows `write_detected: false` for every sample — the loud invalidation signal).
+- C artifacts: `output/runs/builtin-memory-full-20260513-222431/oc-builtin/` (`memory_write_verification.invariant_held: true`, rule `"all"`, all 10 per-sample workspaces populated).

@@ -36,7 +36,7 @@ def _locomo_sample(sample_id: str) -> dict:
 
 def _base_args(**overrides) -> argparse.Namespace:
     backend = OpenClawBackend(
-        backend_id="oo-builtin",
+        backend_id="oc-builtin",
         base_url="http://127.0.0.1:19002",
         token="tok",
         agent="base-agent",

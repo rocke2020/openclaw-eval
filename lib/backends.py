@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from pathlib import Path
 import json
 import shutil
 import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Protocol
 
 from lib.openclaw import send_message_with_retry
@@ -400,7 +400,7 @@ class OpenClawOVPluginBackend:
 
 
 def build_backend(backend_id: str, args) -> MemoryBackend:
-    if backend_id == "oo-builtin":
+    if backend_id == "oc-builtin":
         actual_backend, backend_failures = read_and_verify_openclaw_memory_backend(
             getattr(args, "openclaw_profile", "eval"),
             "builtin",
@@ -414,7 +414,7 @@ def build_backend(backend_id: str, args) -> MemoryBackend:
             actual_memory_backend=actual_backend,
             memory_backend_failures=backend_failures,
         )
-    if backend_id == "oo-builtin-vector":
+    if backend_id == "oc-builtin-vector":
         expected = dict(EXPECTED_BUILTIN_VECTOR_MEMORY_SEARCH)
         actual_backend, backend_failures = read_and_verify_openclaw_memory_backend(
             getattr(args, "openclaw_profile", "eval"),

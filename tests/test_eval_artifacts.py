@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import main as main_module
 from lib.artifacts import (
     build_manifest,
     render_comparison_report_html,
@@ -13,7 +14,6 @@ from lib.artifacts import (
     write_answers,
     write_manifest,
 )
-import main as main_module
 from main import (
     canary_record_leaked,
     count_canary_leakage,
@@ -166,13 +166,13 @@ class EvalArtifactsTests(unittest.TestCase):
             [
                 {"backend_id": "openviking", "judge_score": 0.1},
                 {
-                    "backend_id": "oo-builtin",
+                    "backend_id": "oc-builtin",
                     "judge_score": 0.2,
                     "openclaw_version": "OpenClaw 2026.5.7 (eeef486)",
                 },
             ],
         )
-        self.assertLess(html.index("oo-builtin"), html.index("openviking"))
+        self.assertLess(html.index("oc-builtin"), html.index("openviking"))
         self.assertIn("OpenClaw 2026.5.7 (eeef486)", html)
 
     def test_build_manifest_records_openclaw_version(self):
@@ -183,7 +183,7 @@ class EvalArtifactsTests(unittest.TestCase):
                 run_dir=str(Path(tmp) / "run"),
                 input=str(data_path),
                 run_group_id=None,
-                backend_id="oo-builtin",
+                backend_id="oc-builtin",
                 backend_kind="openclaw",
                 base_url="http://127.0.0.1:19002",
                 agent="eval-locomo",
@@ -374,7 +374,7 @@ class EvalArtifactsTests(unittest.TestCase):
     def test_eval_isolation_gate_checks_backend_agents(self):
         args = argparse.Namespace(
             mode="eval",
-            backends="oo-builtin,oo-builtin-vector,openviking",
+            backends="oc-builtin,oc-builtin-vector,openviking",
             agent="default-agent",
             builtin_agent="builtin-agent",
             builtin_vector_agent="builtin-vector-agent",
@@ -384,8 +384,8 @@ class EvalArtifactsTests(unittest.TestCase):
         self.assertEqual(
             main_module.strict_isolation_agents_for_args(args),
             [
-                ("oo-builtin", "builtin-agent"),
-                ("oo-builtin-vector", "builtin-vector-agent"),
+                ("oc-builtin", "builtin-agent"),
+                ("oc-builtin-vector", "builtin-vector-agent"),
             ],
         )
 
@@ -415,7 +415,7 @@ class EvalArtifactsTests(unittest.TestCase):
     def test_eval_default_backends_include_builtin_vector_not_qmd(self):
         self.assertEqual(
             main_module.DEFAULT_EVAL_BACKENDS,
-            "oo-builtin,oo-builtin-vector,openviking",
+            "oc-builtin,oc-builtin-vector,openviking",
         )
         self.assertNotIn("oo-qmd", main_module.DEFAULT_EVAL_BACKENDS)
 
@@ -611,7 +611,7 @@ class EvalArtifactsTests(unittest.TestCase):
                 judge_model=None,
                 judge_base_url=None,
                 run_group_id=None,
-                backend_id="oo-builtin",
+                backend_id="oc-builtin",
                 backend_kind="openclaw",
                 canary=False,
                 canary_count=3,

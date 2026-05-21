@@ -4,9 +4,9 @@ We now have three valid builtin-memory `locomo10.json` runs. All three used the 
 
 | Run | Date | Harness commit | Artifacts | Score | Notes |
 |---|---|---|---|---:|---|
-| 1 | 2026-05-13 | `11ea451` | `output/runs/builtin-memory-full-20260513-222431/oo-builtin/` | **1262/1986 = 63.54%** | Original trustworthy row after per-sample isolation was fixed. |
-| 2 | 2026-05-16 | `c600be1` | `output/runs/builtin-memory-variance-20260516-102511/oo-builtin/` | **1116/1986 = 56.19%** | Fresh run after restoring strict builtin write tools. Judge had to be rerun with proxy env cleared. |
-| 3 | 2026-05-16 | `d430cb6` | `output/runs/builtin-memory-variance-20260516-192805/oo-builtin/` | **1193/1986 = 60.07%** | Fresh agent/workspace. Integrated judge hit the same local SOCKS proxy issue; judge-only rerun succeeded. |
+| 1 | 2026-05-13 | `11ea451` | `output/runs/builtin-memory-full-20260513-222431/oc-builtin/` | **1262/1986 = 63.54%** | Original trustworthy row after per-sample isolation was fixed. |
+| 2 | 2026-05-16 | `c600be1` | `output/runs/builtin-memory-variance-20260516-102511/oc-builtin/` | **1116/1986 = 56.19%** | Fresh run after restoring strict builtin write tools. Judge had to be rerun with proxy env cleared. |
+| 3 | 2026-05-16 | `d430cb6` | `output/runs/builtin-memory-variance-20260516-192805/oc-builtin/` | **1193/1986 = 60.07%** | Fresh agent/workspace. Integrated judge hit the same local SOCKS proxy issue; judge-only rerun succeeded. |
 
 ## Per-category scores
 

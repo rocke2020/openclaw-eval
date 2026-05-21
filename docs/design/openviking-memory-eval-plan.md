@@ -38,7 +38,7 @@ Both new rows use **the same OpenClaw agent loop** (`send_message_with_retry` ag
    ──────────────────────────────────────────────────────────────────────────
    Row id                       contextEngine slot   memory-core.enabled
    ──────────────────────────────────────────────────────────────────────────
-   oo-builtin (already exists)  legacy               true
+   oc-builtin (already exists)  legacy               true
    oc-ov-plugin-bare       (new) openviking           false
    oc-ov-plugin-augmented  (new) openviking           true
    ──────────────────────────────────────────────────────────────────────────
@@ -120,7 +120,7 @@ These are the variables the published comparison fixed. Each one becomes a manif
 | Cross-sample contamination canaries | `select_canary_pairs` is backend-agnostic | Reuse verbatim — questions route through the same `_call_answer` path. |
 | Adversarial isolation canaries | `ADVERSARIAL_CANARY_CASES` (asks about `${OPENCLAW_HOME}`, `memory_get` over absolute paths) | Mostly portable. Tool-escape and absolute-path canaries probe OC's `memory_get` which is also exposed via OV plugin tool set. Recast the probe text to mention OV `viking://` URIs as well; keep `leak_markers`. |
 | Manifest builder | `lib/artifacts.py:build_manifest` already records `openclaw_version`, `openclaw_profile`, `openclaw_base_url`, judge model fields, etc. | Extend with the OV-plugin-conditional fields enumerated under "Manifest contract". |
-| Run pipeline | `main.py:_collect_one_backend` — provisions, ingests, runs runtime evidence (for `oo-builtin-vector`), runs QA, then publishability gate | Add a `before_each_backend(args, backend)` hook that mutates the eval profile config to the per-row state, restarts the gateway, and re-reads the live config; restore state in `after_each_backend`. |
+| Run pipeline | `main.py:_collect_one_backend` — provisions, ingests, runs runtime evidence (for `oc-builtin-vector`), runs QA, then publishability gate | Add a `before_each_backend(args, backend)` hook that mutates the eval profile config to the per-row state, restarts the gateway, and re-reads the live config; restore state in `after_each_backend`. |
 | Comparison report | `lib/artifacts.py:render_comparison_report_html` reads `group_manifest`, per-backend manifests, judge scores | Add reproduction-target columns (published score / token count) and a delta column for the two new rows; no other shape changes. |
 
 ### Minimum set of changes that achieves the stated goal
@@ -168,7 +168,7 @@ Not applicable. No new artifact. Internal harness change.
 
 The OC eval profile must hold these values when each row runs. The strict-isolation gate **reads from live config** and refuses the run on any drift.
 
-| Key | `oo-builtin` (existing baseline) | `oc-ov-plugin-bare` (new) | `oc-ov-plugin-augmented` (new) |
+| Key | `oc-builtin` (existing baseline) | `oc-ov-plugin-bare` (new) | `oc-ov-plugin-augmented` (new) |
 |---|---|---|---|
 | `plugins.slots.contextEngine` | `legacy` (or unset) | `openviking` | `openviking` |
 | `plugins.entries.memory-core.enabled` | `true` | `false` | `true` |
@@ -194,7 +194,7 @@ The OC eval profile must hold these values when each row runs. The strict-isolat
 
 Same answer as the table in Step 0. Shortest restatement:
 
-- **Reuse verbatim**: OC agent loop, per-sample agent provisioning, per-sample user keying, cross-sample contamination canaries, judge pipeline, run-group structure, JSONL artifact writers, the existing `oo-builtin` row (used as published-baseline reference, not delivered by this plan).
+- **Reuse verbatim**: OC agent loop, per-sample agent provisioning, per-sample user keying, cross-sample contamination canaries, judge pipeline, run-group structure, JSONL artifact writers, the existing `oc-builtin` row (used as published-baseline reference, not delivered by this plan).
 - **Reuse with adaptation**: strict-isolation gate (extend per-row allowlists), adversarial canary cases (recast probe text to mention `viking://` URIs), manifest builder (OV-conditional fields), runtime evidence scanner (add OV plugin tool detection).
 - **Do not reuse**: nothing is replaced. The existing retrieval-only `OpenVikingBackend` is removed after the first publishable plugin run; until then it stays accessible behind `--allow-non-publishable` for retrieval-only experiments.
 
@@ -203,7 +203,7 @@ Same answer as the table in Step 0. Shortest restatement:
 ## NOT in Scope (explicit deferrals)
 
 1. **The LanceDB row** from the published table (44.55% / 51.5M tokens). Different memory stack entirely.
-2. **The OC-only baseline row** (35.65% / 24.6M tokens). Already supported via the existing `oo-builtin` backend.
+2. **The OC-only baseline row** (35.65% / 24.6M tokens). Already supported via the existing `oc-builtin` backend.
 3. **Exact reproduction** (per "Goal" section). Pinned OV `0.1.18`, matched judge model, and confirmed answer-model parity are gated behind the directional rerun's findings. See **Open Question O5**.
 4. **Replacing the retrieval-only `OpenVikingBackend`.** Kept as-is. Per codex feedback, deletion is **decoupled from this plan's success/failure**: removed in a separate single-purpose PR when the user decides, not when this PR scores well.
 5. **Per-account OV isolation.** OV server runs in `auth_mode=dev`. Account-tenancy requires switching to `api_key` mode. This plan relies on agent-prefix scoping inside the dev account.

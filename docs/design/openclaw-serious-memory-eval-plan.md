@@ -13,12 +13,12 @@
 This plan is being updated after the first strict builtin-memory runs and the QMD stop decision.
 
 - `oo-qmd` is stopped. The code still contains a registry entry and CLI flag for it, but QMD should not be used for new primary LoCoMo rows. See `docs/eval-journal/2026-05-16-stop-qmd-memory-eval.md`.
-- The replacement OpenClaw comparison row is `oo-builtin-vector` (the intended spelling for "OpenClaw builtin vector"; if older notes say `oo-builin-vector`, treat that as a typo unless code deliberately chooses that id).
-- `oo-builtin-vector` should preserve builtin memory's durable markdown write contract (`MEMORY.md` / `memory/*.md`) and add semantic vector retrieval over that same durable memory state.
+- The replacement OpenClaw comparison row is `oc-builtin-vector` (the intended spelling for "OpenClaw builtin vector"; if older notes say `oo-builin-vector`, treat that as a typo unless code deliberately chooses that id).
+- `oc-builtin-vector` should preserve builtin memory's durable markdown write contract (`MEMORY.md` / `memory/*.md`) and add semantic vector retrieval over that same durable memory state.
 - The vector retrieval row uses local Ollama with Qwen3 0.6B embedding. Verified default `~/.openclaw/openclaw.json` currently has `agents.defaults.memorySearch.provider="ollama"`, `remote.baseUrl="http://127.0.0.1:11434"`, `model="qwen3-embedding:0.6b"`, vector store enabled, and hybrid query enabled with `vectorWeight=0.8`, `textWeight=0.2`, `candidateMultiplier=6`.
 - The local Ollama service at `127.0.0.1:11434` currently advertises `qwen3-embedding:0.6b` with family `qwen3`, parameter size `595.78M`, and quantization `Q8_0`.
 - The embedding model and vector index config must be recorded in `manifest.json.backend_config`.
-- The current repo code registers `oo-builtin`, `oo-qmd`, and `openviking` in `lib/backends.py`; it does not yet register `oo-builtin-vector`. The implementation work is therefore to stop advertising QMD in docs/default comparison commands and add the builtin-vector backend path.
+- The current repo code registers `oc-builtin`, `oo-qmd`, and `openviking` in `lib/backends.py`; it does not yet register `oc-builtin-vector`. The implementation work is therefore to stop advertising QMD in docs/default comparison commands and add the builtin-vector backend path.
 
 ---
 
@@ -75,8 +75,8 @@ The primary comparison should run the active backends under one run group:
 
 ```text
 output/runs/<group_id>/
-  oo-builtin/
-  oo-builtin-vector/
+  oc-builtin/
+  oc-builtin-vector/
   openviking/
   comparison_report.html
   comparison_summary.json
@@ -84,8 +84,8 @@ output/runs/<group_id>/
 
 | Backend id | Purpose | Ingest path | QA path | Isolation |
 |------------|---------|-------------|---------|-----------|
-| `oo-builtin` | Baseline | OpenClaw `/v1/responses` with built-in memory backend | OpenClaw `/v1/responses` | dedicated `eval-locomo-builtin` agent/profile |
-| `oo-builtin-vector` | OpenClaw builtin memory plus semantic vector retrieval | OpenClaw `/v1/responses` with durable builtin memory write path and vector retrieval enabled | OpenClaw `/v1/responses` | dedicated `eval-locomo-builtin-vector` agent/profile/workspace |
+| `oc-builtin` | Baseline | OpenClaw `/v1/responses` with built-in memory backend | OpenClaw `/v1/responses` | dedicated `eval-locomo-builtin` agent/profile |
+| `oc-builtin-vector` | OpenClaw builtin memory plus semantic vector retrieval | OpenClaw `/v1/responses` with durable builtin memory write path and vector retrieval enabled | OpenClaw `/v1/responses` | dedicated `eval-locomo-builtin-vector` agent/profile/workspace |
 | `openviking` | External memory comparison | `ov add-memory` through an adapter | `ov search` plus fixed answer prompt, or stable OpenViking chat if available | dedicated OpenViking account/user/agent id |
 
 Stopped backend:
@@ -99,10 +99,10 @@ Fairness rules:
 - Use the same dataset file, sample set, session range, message formatter, category policy, and judge for every backend.
 - Use the same final answer model where the backend design allows it. If one backend controls its answer model internally, record that explicitly in `manifest.json`.
 - Keep OpenClaw built-in memory as the baseline row in every comparison report.
-- Keep builtin-vector conservative: it must use the same durable memory write path as `oo-builtin`; only retrieval may add semantic vector search over those files.
+- Keep builtin-vector conservative: it must use the same durable memory write path as `oc-builtin`; only retrieval may add semantic vector search over those files.
 - The eval profile must allow `memory_search`, `memory_get`, `write`, and `edit`. Prior builtin-memory runs showed that OpenClaw writes durable builtin memory through normal file `write`/`edit` tools under the isolated agent workspace; if `write` and `edit` are denied, ingest can only read/search memory and `memory_write_verification` fails for every selected sample.
-- For `oo-builtin-vector`, record the embedding provider/model, vector dimension, indexed source paths, index root, and whether lexical retrieval is also enabled. The intended embedding config is the verified local Ollama setup: provider `ollama`, base URL `http://127.0.0.1:11434`, model `qwen3-embedding:0.6b`, vector store enabled, hybrid retrieval enabled.
-- Do not treat `agents.defaults.memorySearch` as proof that a run used the claimed OpenClaw memory backend. The active backend is controlled separately by `memory.backend`; it must exactly match the backend under test (`oo-builtin` -> `"builtin"`, `oo-builtin-vector` -> `"builtin-vector"`, `oo-qmd` -> `"qmd"`). Session transcripts must show matching runtime `memory_search` tool results, not `provider/model/backend=qmd`, for a publishable `oo-builtin-vector` row.
+- For `oc-builtin-vector`, record the embedding provider/model, vector dimension, indexed source paths, index root, and whether lexical retrieval is also enabled. The intended embedding config is the verified local Ollama setup: provider `ollama`, base URL `http://127.0.0.1:11434`, model `qwen3-embedding:0.6b`, vector store enabled, hybrid retrieval enabled.
+- Do not treat `agents.defaults.memorySearch` as proof that a run used the claimed OpenClaw memory backend. The active backend is controlled separately by `memory.backend`; it must exactly match the backend under test (`oc-builtin` -> `"builtin"`, `oc-builtin-vector` -> `"builtin-vector"`, `oo-qmd` -> `"qmd"`). Session transcripts must show matching runtime `memory_search` tool results, not `provider/model/backend=qmd`, for a publishable `oc-builtin-vector` row.
 - Do not mix backend runs in the same OpenClaw agent, OpenViking user, workspace, or memory directory.
 - Report backend setup separately from score, because a higher score with a non-equivalent setup is not a clean memory-backend comparison.
 
@@ -241,12 +241,12 @@ For the three-backend comparison:
 ```bash
 uv run python main.py eval ./locomo10.json \
   --run-group output/runs/locomo-memory-comparison-001 \
-  --backends oo-builtin,oo-builtin-vector,openviking \
+  --backends oc-builtin,oc-builtin-vector,openviking \
   --include-categories 1,2,3,4,5 \
   --judge-model gpt-4o-mini
 ```
 
-The eval command should expand into normal strict runs and then render the group-level comparison artifacts. It should fail fast if a requested backend cannot be configured, unless `--allow-non-publishable` is set. As of the current code, this command shape is aspirational for `oo-builtin-vector`: `lib/backends.py` still needs the registry entry and CLI agent argument.
+The eval command should expand into normal strict runs and then render the group-level comparison artifacts. It should fail fast if a requested backend cannot be configured, unless `--allow-non-publishable` is set. As of the current code, this command shape is aspirational for `oc-builtin-vector`: `lib/backends.py` still needs the registry entry and CLI agent argument.
 
 ## File Structure
 
@@ -335,7 +335,7 @@ Comparison data flow:
           |                |                |
           v                v                v
    +-------------+  +-------------+  +-------------+
-   | oo-builtin  |  |oo-builtin-  |  | openviking  |
+   | oc-builtin  |  |oc-builtin-  |  | openviking  |
    |             |  |   vector    |  |             |
    | strict run  |  | strict run  |  | strict run  |
    +------+------+  +------+------+  +------+------+
@@ -356,7 +356,7 @@ Comparison data flow:
 
 ## Task 1: Split LoCoMo Formatting And QA Selection
 
-Note: the task list below is the original implementation scaffold. The current repository has already landed most of this under `main.py` and `lib/*`; use the "Current Reality", "Backend Matrix", "Target CLI", and "File Structure" sections above as authoritative for new work. Remaining work from this document is specifically the stopped-QMD cleanup and the new `oo-builtin-vector` backend path.
+Note: the task list below is the original implementation scaffold. The current repository has already landed most of this under `main.py` and `lib/*`; use the "Current Reality", "Backend Matrix", "Target CLI", and "File Structure" sections above as authoritative for new work. Remaining work from this document is specifically the stopped-QMD cleanup and the new `oc-builtin-vector` backend path.
 
 **Files:**
 - Create: `eval_locomo.py`
@@ -577,8 +577,8 @@ Keep it deliberately thin. The benchmark should own LoCoMo formatting, category 
 Add two configured OpenClaw variants:
 
 ```python
-oo-builtin -> OpenClawBackend(agent="eval-locomo-builtin", expected_memory_backend="builtin")
-oo-builtin-vector -> OpenClawBackend(
+oc-builtin -> OpenClawBackend(agent="eval-locomo-builtin", expected_memory_backend="builtin")
+oc-builtin-vector -> OpenClawBackend(
     agent="eval-locomo-builtin-vector",
     expected_memory_backend="builtin-vector",
     expected_memory_search={
@@ -600,7 +600,7 @@ The legacy `oo-qmd` registry entry should be removed from default comparison doc
 Add:
 
 ```bash
-uv run python main.py eval ./locomo10.json --run-group output/runs/<group> --backends oo-builtin,oo-builtin-vector,openviking
+uv run python main.py eval ./locomo10.json --run-group output/runs/<group> --backends oc-builtin,oc-builtin-vector,openviking
 ```
 
 The command should create one strict run directory per backend and then render group-level summary/report artifacts.
@@ -1244,7 +1244,7 @@ def test_openviking_search_normalizes_json_output():
     # parse mocked ov search JSON
 
 def test_comparison_report_orders_builtin_first():
-    # oo-builtin remains baseline row
+    # oc-builtin remains baseline row
 ```
 
 - [ ] **Step 6: Verify**
@@ -1303,11 +1303,11 @@ Add:
 ```bash
 uv run python main.py eval ./locomo10.json \
   --run-group output/runs/locomo-memory-comparison-001 \
-  --backends oo-builtin,oo-builtin-vector,openviking \
+  --backends oc-builtin,oc-builtin-vector,openviking \
   --include-categories 1,2,3,4,5
 ```
 
-Document that `oo-builtin` is the baseline, `oo-builtin-vector` is the OpenClaw builtin memory variant with vector retrieval, and `openviking` is a separate memory system adapter. State that `oo-qmd` is stopped for primary evals.
+Document that `oc-builtin` is the baseline, `oc-builtin-vector` is the OpenClaw builtin memory variant with vector retrieval, and `openviking` is a separate memory system adapter. State that `oo-qmd` is stopped for primary evals.
 
 - [ ] **Step 4: Document category policy**
 
@@ -1320,7 +1320,7 @@ A run is not publishable if:
 - `memory_write_verification.status` is `not_configured`
 - the eval agent is `main`
 - requested backend config cannot be verified
-- `oo-builtin-vector` does not record the verified Ollama/Qwen3 embedding config
+- `oc-builtin-vector` does not record the verified Ollama/Qwen3 embedding config
 - QMD is requested in a primary comparison run instead of an explicit ablation
 - category exclusions are not declared
 - manifest is missing dataset hash or eval commit
@@ -1331,7 +1331,7 @@ A run is not publishable if:
 Run:
 
 ```bash
-rg -n "eval-locomo|memory_write_verification|include-categories|openclaw --profile eval|oo-builtin|oo-builtin-vector|qwen3-embedding|openviking" README.md docs/runbooks/reproducible-locomo-eval.md
+rg -n "eval-locomo|memory_write_verification|include-categories|openclaw --profile eval|oc-builtin|oc-builtin-vector|qwen3-embedding|openviking" README.md docs/runbooks/reproducible-locomo-eval.md
 ```
 
 Expected: all key terms are present.
@@ -1407,8 +1407,8 @@ Only commit if this step produced intentional changes.
 
 The repo is ready for strict memory eval when all of these are true:
 
-- The harness can run `oo-builtin`, `oo-builtin-vector`, and `openviking` under one comparison group.
-- `oo-builtin` is always reported as the baseline row.
+- The harness can run `oc-builtin`, `oc-builtin-vector`, and `openviking` under one comparison group.
+- `oc-builtin` is always reported as the baseline row.
 - The harness can target `openclaw/eval-locomo` without touching `main`.
 - Built-in and builtin-vector OpenClaw runs use separate agents/profiles/workspaces.
 - Builtin-vector manifests record the verified local Ollama embedding config: provider `ollama`, base URL `http://127.0.0.1:11434`, model `qwen3-embedding:0.6b`, vector store enabled, hybrid retrieval enabled.
@@ -1521,7 +1521,7 @@ Memory backend comparison status:
 - Run group: <path>
 - Dataset hash: <sha256>
 - Categories: <included categories>
-- Baseline: oo-builtin score <score>
+- Baseline: oc-builtin score <score>
 - Builtin-vector: score <score>, delta vs baseline <delta>, embedding <provider/model>
 - OpenViking: score <score>, delta vs baseline <delta>
 - Non-publishable backends: <list and reasons>
@@ -1539,20 +1539,20 @@ Memory backend comparison status:
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | not run | CLI help/defaults are covered by Eng review requirements. |
 
 - **UNRESOLVED:** 0.
-- **VERDICT:** ENG CLEARED — ready to implement `oo-builtin-vector` only if the implementation follows the approved full publishability gate, not the minimal runnable shortcut.
+- **VERDICT:** ENG CLEARED — ready to implement `oc-builtin-vector` only if the implementation follows the approved full publishability gate, not the minimal runnable shortcut.
 
 ### Approved Engineering Decisions
 
-1. `oo-builtin-vector` must be publishability-gated before any score is trusted. Do not stop at a backend registry row.
+1. `oc-builtin-vector` must be publishability-gated before any score is trusted. Do not stop at a backend registry row.
 2. The harness must verify the active `--openclaw-profile eval` vector config, not only the default `~/.openclaw/openclaw.json` config.
 3. Add `--builtin-vector-agent`, defaulting to `eval-locomo-builtin-vector`, and include it in strict isolation checks.
 4. Keep vector backend verification owned by `lib/backends.py`; `main.py` should only orchestrate the pipeline.
-5. Change the default eval backend list from `oo-builtin,oo-qmd,openviking` to `oo-builtin,oo-builtin-vector,openviking`; keep `oo-qmd` explicit-only for ablations.
+5. Change the default eval backend list from `oc-builtin,oo-qmd,openviking` to `oc-builtin,oc-builtin-vector,openviking`; keep `oo-qmd` explicit-only for ablations.
 6. Add negative tests for wrong vector config, not just happy-path registry tests.
 
 ### Implementation Requirements
 
-- Add `oo-builtin-vector` to `build_backend()` with `expected_memory_backend="builtin-vector"`.
+- Add `oc-builtin-vector` to `build_backend()` with `expected_memory_backend="builtin-vector"`.
 - Add a backend-owned verifier that reads `agents.defaults.memorySearch` from the active OpenClaw profile and records both expected and actual config in `manifest.json.backend_config`.
 - Required vector config for publishable runs:
   - provider: `ollama`
@@ -1561,7 +1561,7 @@ Memory backend comparison status:
   - vector store enabled
   - hybrid query enabled
   - `vectorWeight=0.8`, `textWeight=0.2`, `candidateMultiplier=6`
-- `oo-builtin-vector` must be non-publishable, or fail before run unless `--allow-non-publishable` is set, when required vector config cannot be verified.
+- `oc-builtin-vector` must be non-publishable, or fail before run unless `--allow-non-publishable` is set, when required vector config cannot be verified.
 - The manifest must make config traceability obvious enough that a later result row can be audited without re-reading local machine state.
 - Strict isolation must preserve the durable-memory write surface: `tools.allow` must be exactly `memory_search`, `memory_get`, `write`, and `edit`. Do not "harden" the profile by removing `write` or `edit`; that makes builtin memory unable to persist memories and invalidates the row.
 
@@ -1569,8 +1569,8 @@ Memory backend comparison status:
 
 ```text
 CODE PATHS                                                EVAL/USER FLOWS
-[+] lib/backends.py                                       [+] `main.py eval --backends oo-builtin-vector`
-  ├── [GAP] build_backend("oo-builtin-vector")              ├── [GAP] [->EVAL] backend accepted and run dir scoped
+[+] lib/backends.py                                       [+] `main.py eval --backends oc-builtin-vector`
+  ├── [GAP] build_backend("oc-builtin-vector")              ├── [GAP] [->EVAL] backend accepted and run dir scoped
   ├── [GAP] manifest_config includes expected+actual        ├── [GAP] wrong profile config rejected/non-publishable
   ├── [GAP] profile config verifier happy path              └── [GAP] manifest records Qwen3/Ollama config
   └── [GAP] profile config verifier wrong-provider/model
@@ -1599,8 +1599,8 @@ QUALITY TARGET: all 10 paths need unit coverage before any real eval score is re
   - `test_builtin_vector_config_verification_rejects_disabled_vector_store`
   - `test_builtin_vector_config_verification_rejects_disabled_hybrid_query`
 - `tests/test_eval_artifacts.py`
-  - update `test_eval_isolation_gate_checks_backend_agents` so `oo-builtin-vector` checks `builtin_vector_agent`.
-  - add a default-backends regression test for `oo-builtin,oo-builtin-vector,openviking`.
+  - update `test_eval_isolation_gate_checks_backend_agents` so `oc-builtin-vector` checks `builtin_vector_agent`.
+  - add a default-backends regression test for `oc-builtin,oc-builtin-vector,openviking`.
 - CLI smoke after implementation:
   - `PYTHONPATH=. uv run pytest tests/test_eval_backends.py tests/test_eval_artifacts.py`
   - `PYTHONPATH=. uv run python main.py eval --help`

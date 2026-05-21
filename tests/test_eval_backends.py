@@ -30,7 +30,9 @@ class EvalBackendsTests(unittest.TestCase):
             build_backend("missing", Args())
 
     def test_compare_run_paths_are_backend_scoped(self):
-        self.assertEqual(str(backend_run_dir("group", "oo-builtin")), "group/oo-builtin")
+        self.assertEqual(
+            str(backend_run_dir("group", "oc-builtin")), "group/oc-builtin"
+        )
 
     def test_openclaw_backend_manifest_records_expected_backend(self):
         backend = OpenClawBackend(
@@ -62,9 +64,9 @@ class EvalBackendsTests(unittest.TestCase):
             mock.patch("lib.backends.read_openclaw_memory_backend", return_value="builtin"),
             mock.patch("lib.backends.read_openclaw_memory_search", return_value=memory_search),
         ):
-            backend = build_backend("oo-builtin-vector", Args())
+            backend = build_backend("oc-builtin-vector", Args())
 
-        self.assertEqual(backend.backend_id, "oo-builtin-vector")
+        self.assertEqual(backend.backend_id, "oc-builtin-vector")
         self.assertEqual(backend.agent, "eval-locomo-builtin-vector")
         self.assertEqual(backend.manifest_config()["expected_memory_backend"], "builtin-vector")
         self.assertEqual(backend.manifest_config()["actual_memory_backend"], "builtin")
@@ -90,7 +92,7 @@ class EvalBackendsTests(unittest.TestCase):
             mock.patch("lib.backends.read_openclaw_memory_backend", return_value="builtin"),
             mock.patch("lib.backends.read_openclaw_memory_search", return_value=memory_search),
         ):
-            backend = build_backend("oo-builtin-vector", Args())
+            backend = build_backend("oc-builtin-vector", Args())
 
         config = backend.manifest_config()
         self.assertEqual(config["actual_memory_backend"], "builtin")
@@ -117,7 +119,7 @@ class EvalBackendsTests(unittest.TestCase):
             mock.patch("lib.backends.read_openclaw_memory_backend", return_value="qmd"),
             mock.patch("lib.backends.read_openclaw_memory_search", return_value=memory_search),
         ):
-            backend = build_backend("oo-builtin-vector", Args())
+            backend = build_backend("oc-builtin-vector", Args())
 
         config = backend.manifest_config()
         self.assertEqual(config["actual_memory_backend"], "qmd")
@@ -132,7 +134,7 @@ class EvalBackendsTests(unittest.TestCase):
 
     def test_builtin_rejects_memory_backend_mismatch(self):
         with mock.patch("lib.backends.read_openclaw_memory_backend", return_value="qmd"):
-            backend = build_backend("oo-builtin", Args())
+            backend = build_backend("oc-builtin", Args())
 
         config = backend.manifest_config()
         self.assertEqual(config["actual_memory_backend"], "qmd")
@@ -160,7 +162,7 @@ class EvalBackendsTests(unittest.TestCase):
 
     def test_builtin_records_matching_memory_backend(self):
         with mock.patch("lib.backends.read_openclaw_memory_backend", return_value="builtin"):
-            backend = build_backend("oo-builtin", Args())
+            backend = build_backend("oc-builtin", Args())
 
         config = backend.manifest_config()
         self.assertEqual(config["actual_memory_backend"], "builtin")
@@ -168,7 +170,7 @@ class EvalBackendsTests(unittest.TestCase):
         self.assertEqual(backend.publishability_failures(), [])
 
     def test_memory_backend_verification_rejects_any_mismatch(self):
-        # oo-builtin-vector requires memory.backend == "builtin" at runtime
+        # oc-builtin-vector requires memory.backend == "builtin" at runtime
         # (vector lives inside builtin via agents.defaults.memorySearch).
         self.assertEqual(verify_openclaw_memory_backend("builtin", "builtin-vector"), [])
         self.assertEqual(
@@ -247,7 +249,7 @@ class EvalBackendsTests(unittest.TestCase):
     def test_openclaw_backend_forwards_per_sample_agent_override(self):
         """Regression: per-sample agent must reach the wire, not the base agent."""
         backend = OpenClawBackend(
-            backend_id="oo-builtin",
+            backend_id="oc-builtin",
             base_url="http://127.0.0.1:19002",
             token="token",
             agent="base-agent",
@@ -261,7 +263,7 @@ class EvalBackendsTests(unittest.TestCase):
 
     def test_openclaw_backend_falls_back_to_self_agent_when_no_override(self):
         backend = OpenClawBackend(
-            backend_id="oo-builtin",
+            backend_id="oc-builtin",
             base_url="http://127.0.0.1:19002",
             token="token",
             agent="base-agent",

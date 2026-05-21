@@ -5,8 +5,8 @@
 The new `oc-ov-plugin-bare` row landed at **1395 / 1986 = 70.24%** on
 LoCoMo10 with the same answer model (`deepseek-v4-flash`) and the same
 1986-QA five-category dataset as the existing local builtin baselines.
-That is **+7 to +14 points overall** vs every prior `oo-builtin` /
-`oo-builtin-vector` run we have. The OV plugin in OpenClaw's
+That is **+7 to +14 points overall** vs every prior `oc-builtin` /
+`oc-builtin-vector` run we have. The OV plugin in OpenClaw's
 `contextEngine` slot wins by wide margins on single-hop, multi-hop, and
 temporal questions, and loses by 6 points on open-ended (cat 3) against
 the strongest builtin run.
@@ -25,13 +25,13 @@ Same dataset (1986 QA, cats 1-5), same answer model
 | Row | Overall | cat 1 | cat 2 | cat 3 | cat 4 | cat 5 |
 |---|---|---|---|---|---|---|
 | **oc-ov-plugin-bare** (this run) | **70.24%** (1395/1986) | **84.04%** | **77.26%** | 66.67% | **90.84%** | 18.39% |
-| oo-builtin full (2026-05-13) | 63.54% (1262/1986) | 71.28% | 67.91% | **72.92%** | 83.47% | 15.92% |
-| oo-builtin variance run 1 (2026-05-16) | 56.19% | 62.06% | 53.58% | 68.75% | 76.69% | 13.00% |
-| oo-builtin variance run 2 (2026-05-16) | 60.07% | 64.18% | 61.37% | 64.58% | 79.67% | 18.61% |
-| oo-builtin-vector full (2026-05-18) | 59.57% (1183/1986) | 67.02% | 59.50% | 65.62% | 79.90% | 15.21% |
+| oc-builtin full (2026-05-13) | 63.54% (1262/1986) | 71.28% | 67.91% | **72.92%** | 83.47% | 15.92% |
+| oc-builtin variance run 1 (2026-05-16) | 56.19% | 62.06% | 53.58% | 68.75% | 76.69% | 13.00% |
+| oc-builtin variance run 2 (2026-05-16) | 60.07% | 64.18% | 61.37% | 64.58% | 79.67% | 18.61% |
+| oc-builtin-vector full (2026-05-18) | 59.57% (1183/1986) | 67.02% | 59.50% | 65.62% | 79.90% | 15.21% |
 
 Per-category deltas vs the strongest prior baseline
-(`oo-builtin full 2026-05-13`):
+(`oc-builtin full 2026-05-13`):
 
 - cat 1 (single-hop): **+12.8 pp**
 - cat 2 (multi-hop): **+9.4 pp**
@@ -162,7 +162,7 @@ host), (c) judge-model parity, (d) re-narrow the dataset filter to cats
 
 ## Variance caveat
 
-`oo-builtin` runs at the same config produced 56.19 / 60.07 / 63.54
+`oc-builtin` runs at the same config produced 56.19 / 60.07 / 63.54
 across three full runs — a 7.35 pp spread. Until we have at least one
 re-run of `oc-ov-plugin-bare` at the same config we cannot say how much
 of the +7-to-+14 lift is the OV plugin and how much is sampling noise

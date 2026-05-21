@@ -160,7 +160,7 @@ RUN_GROUP="output/runs/builtin-memory-full-$(date +%Y%m%d-%H%M%S)"
 
 OPENCLAW_GATEWAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN" PYTHONPATH=. uv run eval.py compare locomo10.json \
   --run-group "$RUN_GROUP" \
-  --backends oo-builtin \
+  --backends oc-builtin \
   --builtin-agent eval-locomo-builtin-full \
   --base-url http://127.0.0.1:19002 \
   --openclaw-home ~/.openclaw-eval \
@@ -172,8 +172,8 @@ OPENCLAW_GATEWAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN" PYTHONPATH=. uv run eval.py com
   --canary
 
 env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy \
-  PYTHONPATH=. uv run python judge.py "$RUN_GROUP/oo-builtin/answers.json" \
-  --output "$RUN_GROUP/oo-builtin/judge_grades.json" \
+  PYTHONPATH=. uv run python judge.py "$RUN_GROUP/oc-builtin/answers.json" \
+  --output "$RUN_GROUP/oc-builtin/judge_grades.json" \
   --base-url https://api.deepseek.com/v1 \
   --token "$DEEPSEEK_API_KEY" \
   --model deepseek-v4-flash \
@@ -194,13 +194,13 @@ Easy-to-confuse flags:
 Run these checks before accepting a result:
 
 ```bash
-jq '{backend_id, openclaw_agent, openclaw_profile, openclaw_model, judge_model, dataset_sample_count, dataset_session_count, dataset_qa_count_selected, eval_repo_dirty, category_policy, memory_write_verification}' "$RUN_GROUP/oo-builtin/manifest.json"
-jq '{agent:.backend_config.agent, expected_memory_backend:.backend_config.expected_memory_backend}' "$RUN_GROUP/oo-builtin/manifest.json"
-jq '{samples:.samples}' "$RUN_GROUP/oo-builtin/memory_write_verification.json"
-jq '{total:.total, usage:.usage}' "$RUN_GROUP/oo-builtin/ingest_summary.json"
-jq '{total:.total, usage:.usage}' "$RUN_GROUP/oo-builtin/qa_summary.json"
-jq '{correct, total, score, per_category}' "$RUN_GROUP/oo-builtin/judge_grades.json"
-jq '.results | length' "$RUN_GROUP/oo-builtin/answers.json"
+jq '{backend_id, openclaw_agent, openclaw_profile, openclaw_model, judge_model, dataset_sample_count, dataset_session_count, dataset_qa_count_selected, eval_repo_dirty, category_policy, memory_write_verification}' "$RUN_GROUP/oc-builtin/manifest.json"
+jq '{agent:.backend_config.agent, expected_memory_backend:.backend_config.expected_memory_backend}' "$RUN_GROUP/oc-builtin/manifest.json"
+jq '{samples:.samples}' "$RUN_GROUP/oc-builtin/memory_write_verification.json"
+jq '{total:.total, usage:.usage}' "$RUN_GROUP/oc-builtin/ingest_summary.json"
+jq '{total:.total, usage:.usage}' "$RUN_GROUP/oc-builtin/qa_summary.json"
+jq '{correct, total, score, per_category}' "$RUN_GROUP/oc-builtin/judge_grades.json"
+jq '.results | length' "$RUN_GROUP/oc-builtin/answers.json"
 ```
 
 Accept the run only if:

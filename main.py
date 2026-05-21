@@ -6,7 +6,7 @@ Usage examples:
   # Full evaluation: ingest + QA + judge + comparison report
   uv run python main.py eval ./locomo10.json \\
       --run-group output/runs/full-$(date +%Y%m%d-%H%M%S) \\
-      --backends oo-builtin \\
+      --backends oc-builtin \\
       --builtin-agent eval-locomo-builtin-full \\
       --agent-workspace ~/.openclaw-eval/workspace-locomo-builtin-full \\
       --include-categories 1,2,3,4,5 \\
@@ -44,6 +44,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from lib.agent_provision import ensure_sample_agent, provision_sample_agents
 from lib.artifacts import (
     build_manifest,
     ensure_run_dir,
@@ -56,13 +57,28 @@ from lib.artifacts import (
     write_jsonl,
     write_manifest,
 )
-from lib.agent_provision import ensure_sample_agent, provision_sample_agents
 from lib.backends import (
     EXPECTED_OPENCLAW_MEMORY_BACKENDS,
     OPENCLAW_OV_PLUGIN_ROW_MATRIX,
     OpenClawOVPluginBackend,
     backend_run_dir,
     build_backend,
+)
+from lib.judge_util import grade_answers, grade_answers_incremental, load_answers
+from lib.locomo import (
+    build_session_messages,
+    dataset_stats,
+    default_sample_user,
+    load_locomo_data,
+    parse_category_set,
+    parse_session_range,
+    select_qas,
+)
+from lib.memory_verify import diff_memory_snapshots, snapshot_memory_files
+from lib.openclaw import (
+    get_session_id,
+    reset_session,
+    send_message_with_retry,
 )
 from lib.openclaw_plugin import (
     assert_answer_model_reachable,
@@ -81,31 +97,13 @@ from lib.openviking_verify import (
     verify_runtime_ov_evidence,
     verify_strict_openviking_scope_isolation,
 )
-from lib.judge_util import grade_answers, grade_answers_incremental, load_answers
-from lib.locomo import (
-    build_session_messages,
-    dataset_stats,
-    default_sample_user,
-    format_locomo_message,
-    load_locomo_data,
-    parse_category_set,
-    parse_session_range,
-    select_qas,
-)
-from lib.memory_verify import diff_memory_snapshots, snapshot_memory_files
-from lib.openclaw import (
-    get_session_id,
-    reset_session,
-    send_message_with_retry,
-)
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 STRICT_MEMORY_TOOLS = {"memory_search", "memory_get", "write", "edit"}
-DEFAULT_EVAL_BACKENDS = "oo-builtin,oo-builtin-vector,openviking"
+DEFAULT_EVAL_BACKENDS = "oc-builtin,oc-builtin-vector,openviking"
 STRICT_FORBIDDEN_TOOLS = {
     "exec",
     "process",
@@ -378,20 +376,20 @@ def _backend_isolation_expectations(backend_id: str) -> tuple[set | None, set | 
 def strict_isolation_agents_for_args(args: argparse.Namespace) -> list[tuple[str, str]]:
     """Return list of (backend_id, agent_id) pairs to gate, in run order."""
     if args.mode != "eval":
-        return [(getattr(args, "backend_id", "oo-builtin"), args.agent)]
+        return [(getattr(args, "backend_id", "oc-builtin"), args.agent)]
     from lib.backends import OPENCLAW_OV_PLUGIN_ROW_MATRIX, _resolve_row_agent
     pairs: list[tuple[str, str]] = []
     backends = [item.strip() for item in args.backends.split(",") if item.strip()]
-    if "oo-builtin" in backends:
-        pairs.append(("oo-builtin", args.builtin_agent))
-    if "oo-builtin-vector" in backends:
-        pairs.append(("oo-builtin-vector", args.builtin_vector_agent))
+    if "oc-builtin" in backends:
+        pairs.append(("oc-builtin", args.builtin_agent))
+    if "oc-builtin-vector" in backends:
+        pairs.append(("oc-builtin-vector", args.builtin_vector_agent))
     if "oo-qmd" in backends:
         pairs.append(("oo-qmd", args.qmd_agent))
     for backend_id in backends:
         if backend_id in OPENCLAW_OV_PLUGIN_ROW_MATRIX:
             pairs.append((backend_id, _resolve_row_agent(args, backend_id)))
-    return pairs or [("oo-builtin", args.agent)]
+    return pairs or [("oc-builtin", args.agent)]
 
 
 def enforce_strict_eval_isolation_for_args(args: argparse.Namespace) -> list[dict]:
@@ -1331,7 +1329,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
     group_manifest = {
         "run_group_id": group_dir.name,
         "backends": backends,
-        "baseline_backend": "oo-builtin",
+        "baseline_backend": "oc-builtin",
     }
     write_json(group_dir / "group_manifest.json", group_manifest)
 
@@ -1641,7 +1639,7 @@ def _collect_one_backend(args: argparse.Namespace, backend_id: str, group_dir: P
     print(f"\n=== Backend {backend_id}: ingest ===", file=sys.stderr)
     run_ingest(run_args)
 
-    if backend_id == "oo-builtin-vector":
+    if backend_id == "oc-builtin-vector":
         samples = load_locomo_data(run_args.input, run_args.sample)
         sample_agent_ids = [
             _resolve_sample_agent(run_args, item["sample_id"])[0]

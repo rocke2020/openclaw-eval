@@ -33,7 +33,7 @@ A sampled builtin-memory smoke run gives a rough cost feel for pipeline validati
 
 ```text
 Dataset: locomo10_small.json
-Backend: oo-builtin / OpenClaw builtin memory-core
+Backend: oc-builtin / OpenClaw builtin memory-core
 Samples: 1
 Sessions: 4
 QA: 50
@@ -123,12 +123,12 @@ report.html
 ```bash
 uv run python main.py eval ./locomo10.json \
   --run-group output/runs/locomo-memory-comparison-001 \
-  --backends oo-builtin,oo-qmd,openviking \
+  --backends oc-builtin,oo-qmd,openviking \
   --include-categories 1,2,3,4,5 \
   --agent-workspace ~/.openclaw-eval/workspace-locomo-eval
 ```
 
-`oo-builtin` is always the baseline row. `oo-qmd` is an OpenClaw memory backend variant. `openviking` uses the OpenViking adapter and records answer mode `openviking-search-rag`.
+`oc-builtin` is always the baseline row. `oo-qmd` is an OpenClaw memory backend variant. `openviking` uses the OpenViking adapter and records answer mode `openviking-search-rag`.
 
 For the primary comparison, QMD extra paths and transcript indexing should stay off unless the run is explicitly marked as an ablation.
 

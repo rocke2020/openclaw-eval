@@ -53,7 +53,6 @@ from lib.agent_provision import (  # noqa: E402
 )
 from lib.artifacts import write_json  # noqa: E402
 
-
 DEFAULT_DEST_BASE_AGENT_PREFIX = "eval-locomo-retrieval-ablation-builtin-from-vector"
 DEFAULT_DEST_WORKSPACE_PARENT = Path.home() / ".openclaw-eval"
 DEFAULT_DEST_WORKSPACE_PREFIX = "workspace-retrieval-ablation-builtin-from-vector"
@@ -284,7 +283,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     clone = sub.add_parser("clone", help="Provision dest agents and overlay condition A memory")
-    clone.add_argument("source_run_dir", help="Path to source backend run dir (e.g. .../oo-builtin-vector/)")
+    clone.add_argument(
+        "source_run_dir",
+        help="Path to source backend run dir (e.g. .../oc-builtin-vector/)",
+    )
     clone.add_argument("--profile", default="eval", help="OpenClaw profile name")
     clone.add_argument("--timestamp", default=None, help="Override timestamp used in dest base names")
     clone.add_argument("--dest-base-agent", default=None, help="Override destination base agent id")

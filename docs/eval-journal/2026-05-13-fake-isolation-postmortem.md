@@ -31,7 +31,7 @@ A wire-routing decision belongs in exactly one place. We had it in two, with the
 
 ## How the verification harness failed to catch this
 
-Memory-write verification was designed for this. It snapshots the per-sample workspace before/after ingest and reports `write_detected`. For every one of the 10 samples it correctly reported `write_detected: false` — and the harness correctly raised `Backend oo-builtin is non-publishable`.
+Memory-write verification was designed for this. It snapshots the per-sample workspace before/after ingest and reports `write_detected`. For every one of the 10 samples it correctly reported `write_detected: false` — and the harness correctly raised `Backend oc-builtin is non-publishable`.
 
 It detected the failure. It did not *prevent* it. By the time it fired:
 
