@@ -4,8 +4,20 @@ import os
 import re
 from typing import Any
 
+import httpx
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
+
+
+def _build_judge_http_client() -> httpx.AsyncClient:
+    """Build the judge's HTTP client without trusting env-based proxies.
+
+    Local shells (zsh) sometimes inject `http_proxy` / `https_proxy` /
+    `all_proxy` for company-VPN tooling. Those proxies are unreachable
+    when the eval runs from a fresh shell. trust_env=False bypasses
+    them and connects directly to the configured judge base URL.
+    """
+    return httpx.AsyncClient(trust_env=False, timeout=120.0)
 
 
 async def locomo_grader(
@@ -128,6 +140,7 @@ async def grade_answers(
     client = AsyncOpenAI(
         base_url=base_url or os.getenv("OPENAI_BASE_URL"),
         api_key=api_key or os.getenv("OPENAI_API_KEY"),
+        http_client=_build_judge_http_client(),
     )
 
     semaphore = asyncio.Semaphore(parallel)
@@ -173,6 +186,7 @@ async def grade_answers_incremental(
     client = AsyncOpenAI(
         base_url=base_url or os.getenv("OPENAI_BASE_URL"),
         api_key=api_key or os.getenv("OPENAI_API_KEY"),
+        http_client=_build_judge_http_client(),
     )
 
     semaphore = asyncio.Semaphore(parallel)
