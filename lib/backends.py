@@ -327,6 +327,7 @@ class OpenClawOVPluginBackend:
     pre_flight_failures: list[str] = field(default_factory=list)
     isolation_gate_failures: list[str] = field(default_factory=list)
     pre_run_empty_scope_failures: list[str] = field(default_factory=list)
+    smoke_isolation_failures: list[str] = field(default_factory=list)
     write_verification_failures: list[str] = field(default_factory=list)
     runtime_evidence_failures: list[str] = field(default_factory=list)
     cross_scope_isolation_failures: list[str] = field(default_factory=list)
@@ -366,6 +367,8 @@ class OpenClawOVPluginBackend:
             "isolation_gate_failures": self.isolation_gate_failures,
             "pre_run_empty_scope_verified": not self.pre_run_empty_scope_failures,
             "pre_run_empty_scope_failures": self.pre_run_empty_scope_failures,
+            "smoke_isolation_verified": not self.smoke_isolation_failures,
+            "smoke_isolation_failures": self.smoke_isolation_failures,
             "write_verification_verified": not self.write_verification_failures,
             "write_verification_failures": self.write_verification_failures,
             "runtime_evidence_verified": not self.runtime_evidence_failures,
@@ -392,6 +395,7 @@ class OpenClawOVPluginBackend:
         failures.extend([f"pre-flight: {x}" for x in self.pre_flight_failures])
         failures.extend([f"isolation gate: {x}" for x in self.isolation_gate_failures])
         failures.extend([f"empty-scope: {x}" for x in self.pre_run_empty_scope_failures])
+        failures.extend([f"smoke isolation: {x}" for x in self.smoke_isolation_failures])
         failures.extend([f"write verification: {x}" for x in self.write_verification_failures])
         failures.extend([f"runtime evidence: {x}" for x in self.runtime_evidence_failures])
         failures.extend([f"cross-scope isolation: {x}" for x in self.cross_scope_isolation_failures])
