@@ -39,13 +39,22 @@ def _ov_bin() -> str:
     return path
 
 
-def _run_ov(*args: str, api_key: str | None = None, timeout_s: float = 30.0) -> dict:
+def _run_ov(
+    *args: str,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    timeout_s: float = 30.0,
+) -> dict:
     cmd = [_ov_bin(), *args]
     env = None
-    if api_key:
+    if api_key or base_url:
         import os
         env = os.environ.copy()
-        env["OPENVIKING_API_KEY"] = api_key
+        if api_key:
+            env["OPENVIKING_API_KEY"] = api_key
+        if base_url:
+            # `ov` reads OPENVIKING_ENDPOINT to override the server URL.
+            env["OPENVIKING_ENDPOINT"] = base_url
     started = time.monotonic()
     result = subprocess.run(
         cmd, capture_output=True, text=True, check=False, env=env, timeout=timeout_s,
@@ -74,6 +83,7 @@ def probe_session_exists(
     ov_agent_id: str,
     user: str,
     api_key: str | None = None,
+    base_url: str | None = None,
 ) -> dict:
     """Return {write_detected, sessions_count, raw}.
 
@@ -88,7 +98,7 @@ def probe_session_exists(
     ]
     if account:
         args.extend(["--account", account])
-    result = _run_ov(*args, api_key=api_key)
+    result = _run_ov(*args, api_key=api_key, base_url=base_url)
     parsed = _parse_ov_json(result["stdout"])
     sessions_count = 0
     if isinstance(parsed, list):
@@ -115,11 +125,17 @@ def probe_positive_recall(
     canary_text: str,
     api_key: str | None = None,
     node_limit: int = 5,
+    base_url: str | None = None,
 ) -> dict:
-    """Return {recall_hit, hit_count, top_score, raw}.
+    """Return {recall_hit, hit_count, top_score, raw, items}.
 
     Read-only. Calls `ov find "<canary>" --agent-id <id> --user <u>
     -n <node_limit> --output json`.
+
+    `recall_hit` is true when ANY result comes back. Callers that need
+    content verification (the canary substring must actually appear in the
+    returned text, not just be a semantic match) should inspect `items`
+    directly — see `_smoke_recall_contains_canary` in main.py.
     """
     args = [
         "find", canary_text,
@@ -130,7 +146,7 @@ def probe_positive_recall(
     ]
     if account:
         args.extend(["--account", account])
-    result = _run_ov(*args, api_key=api_key)
+    result = _run_ov(*args, api_key=api_key, base_url=base_url)
     parsed = _parse_ov_json(result["stdout"])
     items: list = []
     if isinstance(parsed, list):
@@ -149,6 +165,7 @@ def probe_positive_recall(
         "recall_hit": bool(items),
         "hit_count": len(items),
         "top_score": top_score,
+        "items": items,
         "ov_agent_id": ov_agent_id,
         "user": user,
         "account": account,

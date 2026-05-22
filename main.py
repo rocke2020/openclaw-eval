@@ -1442,49 +1442,107 @@ def _ov_scope_agent_id(prefix: str, oc_agent_id: str) -> str:
     return f"{prefix}_{sanitised}"
 
 
-_SMOKE_AGENT_SUFFIX = "_smoke_isolation"
-_SMOKE_USER_SUFFIX = "_smoke_isolation_user"
+_SMOKE_AGENT_PREFIX = "_smoke"
+_SMOKE_USER_PREFIX = "eval-smoke"
+_SMOKE_POLL_DEADLINE_S = 15.0
+_SMOKE_POLL_INTERVAL_S = 0.5
+
+
+def _smoke_recall_contains_canary(items: list, canary: str) -> bool:
+    """A recall result counts only when the canary substring is actually in
+    one of the returned items. Avoids accepting scaffold/templated records
+    or unrelated semantic neighbors as a hit (codex review finding #3)."""
+    needle = canary.lower()
+    for item in items or []:
+        if isinstance(item, str):
+            if needle in item.lower():
+                return True
+        elif isinstance(item, dict):
+            # Try common content fields first; fall back to whole-item JSON.
+            for key in ("text", "content", "chunk", "body", "snippet", "value"):
+                v = item.get(key)
+                if isinstance(v, str) and needle in v.lower():
+                    return True
+            try:
+                blob = json.dumps(item, ensure_ascii=False).lower()
+            except (TypeError, ValueError):
+                continue
+            if needle in blob:
+                return True
+    return False
 
 
 def _ov_plugin_smoke_isolation_gate(
-    backend: OpenClawOVPluginBackend, run_dir: Path,
+    backend: OpenClawOVPluginBackend,
+    run_dir: Path,
+    args: argparse.Namespace,
 ) -> None:
-    """Hard pre-run gate: one canned ingest must land in the per-sample OV scope.
+    """Hard pre-run gate: one canned ingest must land in the per-sample OV
+    scope and NOWHERE else.
 
-    This catches the 2026-05-20 failure mode where the OV plugin writes
-    extractions to shared `viking://user/default/memories/` instead of the
-    per-sample agent scope the harness's isolation contract requires.
+    Catches the 2026-05-20 failure mode (extractions land in shared
+    `viking://user/default/memories/`) plus adjacent failure modes:
+    dual-writes (per-sample AND shared), template-scaffold-only writes,
+    cross-agent-leakage, slow async extraction.
 
     Flow:
-      1. Build a throwaway smoke OC agent (`<base-agent>-_smoke_isolation`)
-         and smoke user (`<base-user>-_smoke_isolation_user`). These are
-         distinct from any real sample agent/user so the smoke does not
-         pollute real-sample scopes.
-      2. Send one canned ingest message containing a unique canary token
-         through the same `backend.ingest()` code path the real eval uses.
-      3. Wait briefly so the OV plugin's commit + extraction pipeline can
-         flush. The OV plugin runs extraction asynchronously after commit.
-      4. Probe the smoke agent's PER-SAMPLE OV scope with
-         `probe_session_exists`. `sessions_count` must be >= 1. If it is
-         zero, writes went elsewhere (most likely shared user/default
-         scope) and the eval would produce an invalid row — abort.
-      5. Probe with `probe_positive_recall(canary)`. `recall_hit` must be
-         true at the per-sample scope. If the canary is not retrievable
-         at the agent scope, retrieval at QA time would not find
-         per-sample content either.
+      1. Build a run-unique throwaway smoke OC agent + smoke user (token
+         in the name; codex finding #1 — idempotent re-runs). Provision
+         the OC agent via ensure_sample_agent when --agent-workspace is
+         set, matching the real per-sample provisioning path (codex
+         finding #4).
+      2. Pre-empty probe at the per-sample agent scope (cannot inherit
+         a pass from stale data).
+      3. Ingest ONE canned message containing a unique canary token
+         through the same backend.ingest() code path the real eval uses.
+      4. Poll probe_session_exists until a session lands or the 15s
+         deadline expires (codex finding #5 — async extraction
+         latency).
+      5. Recall probe at per-sample scope. Returned items must contain
+         the canary substring, not just any neighbor (codex finding #3).
+      6. Dual-write probes — canary must NOT appear at:
+            (a) a never-used sibling smoke agent (cross-agent leak), or
+            (b) user="default" at the smoke agent (shared-scope leak).
+         Either hit means the plugin is writing to a shared scope on
+         top of per-sample, contaminating future samples (codex finding
+         #2).
+
+    All probes pass backend.openviking_server_base_url through so the
+    `ov` CLI talks to the same OV server the plugin talks to (codex
+    finding #6).
 
     On any failure: write the evidence artifact and raise SystemExit
-    UNCONDITIONALLY. There is no `--allow-non-publishable` bypass for this
-    gate; a row that fails it cannot measure what its name claims.
+    UNCONDITIONALLY. There is no `--allow-non-publishable` bypass.
     """
     import time as _time
     import uuid as _uuid
 
-    token = _uuid.uuid4().hex[:16]
+    token = _uuid.uuid4().hex[:8]
     canary = f"smoke-isolation-canary-{token}"
-    smoke_oc_agent = f"{backend.agent}{_SMOKE_AGENT_SUFFIX}"
+    sample_id = f"{_SMOKE_AGENT_PREFIX}_{token}"
+    witness_sample_id = f"{_SMOKE_AGENT_PREFIX}_witness_{token}"
+    smoke_user = f"{_SMOKE_USER_PREFIX}-{token}"
+    server_url = backend.openviking_server_base_url
+
+    profile = getattr(args, "openclaw_profile", "eval")
+    agent_workspace = getattr(args, "agent_workspace", None)
+    if agent_workspace:
+        info = ensure_sample_agent(
+            profile=profile,
+            base_agent=backend.agent,
+            base_workspace=agent_workspace,
+            sample_id=sample_id,
+        )
+        smoke_oc_agent = info["agent_id"]
+    else:
+        smoke_oc_agent = f"{backend.agent}-{sample_id}"
     smoke_ov_agent = _ov_scope_agent_id(backend.openviking_agent_prefix, smoke_oc_agent)
-    smoke_user = f"eval-smoke{_SMOKE_USER_SUFFIX}"
+
+    # Witness agent: same naming pattern but NEVER ingested into. If the
+    # canary shows up at this scope, writes are leaking across agents.
+    witness_oc_agent = f"{backend.agent}-{witness_sample_id}"
+    witness_ov_agent = _ov_scope_agent_id(backend.openviking_agent_prefix, witness_oc_agent)
+
     message = (
         f"Please remember this verification marker for our session: {canary}. "
         f"It was issued at {_time.strftime('%Y-%m-%dT%H:%M:%SZ', _time.gmtime())}. "
@@ -1496,42 +1554,49 @@ def _ov_plugin_smoke_isolation_gate(
         "smoke_oc_agent": smoke_oc_agent,
         "smoke_ov_agent": smoke_ov_agent,
         "smoke_user": smoke_user,
+        "witness_ov_agent": witness_ov_agent,
         "canary_text": canary,
+        "openviking_server_base_url": server_url,
         "started_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
         "ingest_status": None,
         "session_probe": None,
         "recall_probe": None,
+        "polling": None,
+        "negative_witness_probe": None,
+        "negative_default_user_probe": None,
         "failures": [],
     }
 
-    # 1. Pre-check: smoke scope must be empty so a pass cannot be inherited
-    #    from a previous smoke run.
+    def _abort(reason_lines: list[str]) -> None:
+        evidence["failures"].extend(reason_lines)
+        evidence["finished_at"] = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+        backend.smoke_isolation_failures.extend(reason_lines)
+        write_json(run_dir / "openviking_smoke_isolation.json", evidence)
+        raise SystemExit(
+            f"Backend {backend.backend_id} smoke isolation gate failed "
+            f"(canary={canary} scope={smoke_ov_agent}): "
+            f"{'; '.join(reason_lines)}"
+        )
+
+    # 1. Pre-check: per-sample smoke scope must be empty so a pass cannot
+    #    be inherited from a previous smoke run.
     try:
         pre = probe_session_exists(
             account=None, ov_agent_id=smoke_ov_agent, user=smoke_user,
+            base_url=server_url,
         )
-        if pre["write_detected"]:
-            evidence["failures"].append(
-                f"smoke OV scope {smoke_ov_agent} is not empty "
-                f"({pre['sessions_count']} pre-existing session(s)) — pick a fresh "
-                "--row-agent or rotate the smoke agent suffix."
-            )
-            backend.smoke_isolation_failures.extend(evidence["failures"])
-            write_json(run_dir / "openviking_smoke_isolation.json", evidence)
-            raise SystemExit(
-                f"Backend {backend.backend_id} smoke isolation gate failed: "
-                f"{'; '.join(evidence['failures'])}"
-            )
-    except SystemExit:
-        raise
     except Exception as exc:
-        evidence["failures"].append(f"smoke pre-empty probe failed: {exc}")
-        backend.smoke_isolation_failures.extend(evidence["failures"])
-        write_json(run_dir / "openviking_smoke_isolation.json", evidence)
-        raise SystemExit(
-            f"Backend {backend.backend_id} smoke isolation gate failed: "
-            f"{'; '.join(evidence['failures'])}"
-        )
+        _abort([f"smoke pre-empty probe failed: {exc}"])
+        return
+    if pre["write_detected"]:
+        _abort([
+            f"smoke OV scope {smoke_ov_agent} is not empty "
+            f"({pre['sessions_count']} pre-existing session(s)). This should "
+            "be impossible with a run-unique smoke token; either the OV "
+            "server has stale data with this exact token, or two harness "
+            "invocations collided. Investigate before retrying."
+        ])
+        return
 
     # 2. Ingest one canned message through the real ingest path.
     try:
@@ -1545,61 +1610,129 @@ def _ov_plugin_smoke_isolation_gate(
         }
     except Exception as exc:
         evidence["ingest_status"] = {"ok": False, "error": str(exc)}
-        evidence["failures"].append(f"smoke ingest call failed: {exc}")
-        backend.smoke_isolation_failures.extend(evidence["failures"])
-        write_json(run_dir / "openviking_smoke_isolation.json", evidence)
-        raise SystemExit(
-            f"Backend {backend.backend_id} smoke isolation gate failed: "
-            f"{'; '.join(evidence['failures'])}"
+        _abort([f"smoke ingest call failed: {exc}"])
+        return
+
+    # 3. Poll for the session to land. OV plugin extraction is async after
+    #    commit; latency varies with model warmup and server load.
+    deadline = _time.monotonic() + _SMOKE_POLL_DEADLINE_S
+    attempts = 0
+    started_poll = _time.monotonic()
+    session_probe = None
+    while True:
+        attempts += 1
+        session_probe = probe_session_exists(
+            account=None, ov_agent_id=smoke_ov_agent, user=smoke_user,
+            base_url=server_url,
         )
-
-    # 3. OV plugin extraction is async after commit; give it room to land.
-    #    Two seconds is generous for a single-message session locally.
-    _time.sleep(2.0)
-
-    # 4. Did a session actually land in the per-sample agent scope?
-    session_probe = probe_session_exists(
-        account=None, ov_agent_id=smoke_ov_agent, user=smoke_user,
-    )
+        if session_probe["write_detected"]:
+            break
+        if _time.monotonic() >= deadline:
+            break
+        _time.sleep(_SMOKE_POLL_INTERVAL_S)
+    evidence["polling"] = {
+        "attempts": attempts,
+        "elapsed_s": round(_time.monotonic() - started_poll, 2),
+        "deadline_s": _SMOKE_POLL_DEADLINE_S,
+    }
     evidence["session_probe"] = session_probe
     if not session_probe["write_detected"]:
-        evidence["failures"].append(
+        _abort([
             f"smoke wrote zero sessions to per-sample OV scope "
-            f"{smoke_ov_agent} (user={smoke_user}). Likely cause: OV plugin "
-            "is writing extractions to shared `user/default` scope instead of "
-            "per-sample agent scope. Aborting before full ingest — a full run "
-            "in this state produces an invalid row (see CLAUDE.md publishability "
-            "rule: every sample must have write_detected=true)."
-        )
+            f"{smoke_ov_agent} (user={smoke_user}) after "
+            f"{evidence['polling']['elapsed_s']}s of polling. Likely cause: "
+            "OV plugin is writing extractions to shared `user/default` scope "
+            "instead of per-sample agent scope. Aborting before full ingest "
+            "— a full run in this state produces an invalid row (see "
+            "CLAUDE.md publishability rule: every sample must have "
+            "write_detected=true)."
+        ])
+        return
 
-    # 5. Can the canary be recalled from the per-sample scope?
+    # 4. Can the canary be recalled from the per-sample scope, AND does the
+    #    returned content actually contain the canary substring?
     recall_probe = probe_positive_recall(
         account=None,
         ov_agent_id=smoke_ov_agent,
         user=smoke_user,
         canary_text=canary,
-        node_limit=3,
+        node_limit=5,
+        base_url=server_url,
     )
     evidence["recall_probe"] = recall_probe
     if not recall_probe["recall_hit"]:
-        evidence["failures"].append(
+        _abort([
             f"smoke canary {canary!r} not retrievable from per-sample OV scope "
             f"{smoke_ov_agent} (user={smoke_user}). Either the writer did not "
             "extract memories into this scope, or the retriever cannot read "
             "this scope. At QA time, per-sample retrieval would also miss."
-        )
+        ])
+        return
+    if not _smoke_recall_contains_canary(recall_probe.get("items", []), canary):
+        _abort([
+            f"smoke recall returned {recall_probe['hit_count']} item(s) at scope "
+            f"{smoke_ov_agent} (user={smoke_user}) but NONE contained the canary "
+            f"substring {canary!r}. The plugin appears to be returning scaffold "
+            "or unrelated records rather than the ingested content. Real QA "
+            "retrieval would surface the same low-signal noise."
+        ])
+        return
 
-    evidence["ok"] = not evidence["failures"]
+    # 5. Dual-write detection: canary must NOT appear at the witness agent
+    #    (cross-agent leak) or at user="default" (shared-scope leak).
+    try:
+        witness_probe = probe_positive_recall(
+            account=None,
+            ov_agent_id=witness_ov_agent,
+            user=smoke_user,
+            canary_text=canary,
+            node_limit=3,
+            base_url=server_url,
+        )
+    except Exception as exc:
+        _abort([f"negative-witness probe failed: {exc}"])
+        return
+    evidence["negative_witness_probe"] = witness_probe
+    if witness_probe["recall_hit"] and _smoke_recall_contains_canary(
+        witness_probe.get("items", []), canary,
+    ):
+        _abort([
+            f"canary {canary!r} leaked to witness agent scope {witness_ov_agent} "
+            f"(user={smoke_user}) that was never ingested into. The OV plugin "
+            "is writing to a shared scope that is visible across agents — "
+            "cross-sample contamination during the real eval is structurally "
+            "guaranteed."
+        ])
+        return
+
+    try:
+        default_user_probe = probe_positive_recall(
+            account=None,
+            ov_agent_id=smoke_ov_agent,
+            user="default",
+            canary_text=canary,
+            node_limit=3,
+            base_url=server_url,
+        )
+    except Exception as exc:
+        _abort([f"negative-default-user probe failed: {exc}"])
+        return
+    evidence["negative_default_user_probe"] = default_user_probe
+    if default_user_probe["recall_hit"] and _smoke_recall_contains_canary(
+        default_user_probe.get("items", []), canary,
+    ):
+        _abort([
+            f"canary {canary!r} also retrievable at user='default' under "
+            f"scope {smoke_ov_agent}. The OV plugin is dual-writing to both "
+            "per-sample AND shared user/default scope; the shared writes "
+            "will contaminate future samples even if per-sample retrieval "
+            "appears clean. Abort."
+        ])
+        return
+
+    evidence["ok"] = True
     evidence["finished_at"] = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
     write_json(run_dir / "openviking_smoke_isolation.json", evidence)
-
-    if evidence["failures"]:
-        backend.smoke_isolation_failures.extend(evidence["failures"])
-        raise SystemExit(
-            f"Backend {backend.backend_id} smoke isolation gate failed "
-            f"(canary={canary} scope={smoke_ov_agent}): "
-            f"{'; '.join(evidence['failures'])}"
-        )
 
 
 def _ov_plugin_pre_run_empty_scope_check(
@@ -1756,7 +1889,7 @@ def _collect_one_backend(args: argparse.Namespace, backend_id: str, group_dir: P
                 f"\n=== Backend {backend_id}: smoke isolation gate ===",
                 file=sys.stderr,
             )
-            _ov_plugin_smoke_isolation_gate(backend, Path(run_args.run_dir))
+            _ov_plugin_smoke_isolation_gate(backend, Path(run_args.run_dir), run_args)
 
             print(f"\n=== Backend {backend_id}: ingest ===", file=sys.stderr)
             run_ingest(run_args)
