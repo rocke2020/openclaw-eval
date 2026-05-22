@@ -1,6 +1,29 @@
 # 2026-05-22 — OpenViking plugin bare: score vs token efficiency
 
-## Headline
+> ## ⚠️ ERRATA — 2026-05-22
+>
+> This entry's score-side claims are withdrawn. Cost-side telemetry is retained.
+>
+> Subsequent investigation (see errata in [2026-05-21-ov-plugin-bare-results.md](2026-05-21-ov-plugin-bare-results.md)) established that the underlying run failed per-sample isolation: extractions landed in shared `viking://user/default/memories/` and `canary.jsonl` records a **62% cross-sample leak rate (23/37)**. The 70.24% headline is invalid as a benchmark score.
+>
+> Specifically withdrawn from this entry:
+>
+> - "**The score is 1395 / 1986 = 70.24%, which is materially above the valid builtin-memory runs.**" — withdrawn. Not a per-sample-isolated row; cannot be compared to builtin runs that were.
+> - "**OV improves recall quality**" (in the Headline and Bottom Line) — withdrawn. The score lift cannot be attributed to OV memory quality when cross-sample contamination affected the answer path at 62% leak rate.
+> - "**+10.31 percentage points**" / "**+202 correct answers**" deltas vs builtin — withdrawn. Not comparable rows.
+> - "Score-wise, OV bare is promising. It wins mainly on factual, temporal, and yes/no categories" — withdrawn. The win pattern may be an artifact of shared-scope retrieval pulling pre-aggregated entity files that span all 10 samples.
+>
+> Retained as still valid (cost telemetry does not depend on isolation correctness):
+>
+> - Token cost table (61.6M input-side, 65.8M total, excluding judge).
+> - Token efficiency ratios (17,837 answer input/QA, 26,283 answer input/correct answer, **but** the "per correct answer" denominator inherits the invalidated score).
+> - Retrieval-call telemetry (6,306 find attempts, 97 embedding tokens/attempt, 5,814 answer-agent input tokens/attempt, 9,765 system input tokens/attempt, 170 ms avg latency).
+> - QA prompt distribution skew (median 913, p95 77,430, max 1,147,404).
+> - The optimization-target bullets (reduce assembled context, cap retrieved-memory blocks, separate write/read cost, record per-call prompt size in artifacts) — these stand independent of score interpretation.
+>
+> The cost numbers describe what the OV plugin path consumed during the run window. They are useful as a "what does this plugin cost to operate" baseline for future engineering work. They are not evidence of quality.
+>
+> ## Headline
 
 `oc-ov-plugin-bare` scored well, but it is not token-efficient enough to treat
 as a real-usage win yet.

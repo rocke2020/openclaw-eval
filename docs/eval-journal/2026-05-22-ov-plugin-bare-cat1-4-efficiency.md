@@ -1,6 +1,21 @@
 # 2026-05-22 — OpenViking plugin bare: cat 1-4 score and token efficiency
 
-## Why Cat 1-4
+> ## ⚠️ ERRATA — 2026-05-22
+>
+> Upgrading the "directional artifact" caveat below to a hard invalidation of the score column.
+>
+> Subsequent investigation (see errata block in [2026-05-21-ov-plugin-bare-results.md](2026-05-21-ov-plugin-bare-results.md)) established:
+>
+> - Per-sample isolation collapsed at the OV side: extracted LoCoMo memories landed in shared `viking://user/default/memories/` instead of per-sample agent scope. Cross-sample contamination is empirically observed at **62% leak rate (23/37 canaries) in `canary.jsonl`**.
+> - The 85.26% headline is **not a valid OV-plugin benchmark score**. Do not cite it for any comparison.
+> - The "verifier mismatch" caveat below is wrong: write_verification correctly detected a real isolation failure, not a probe bug.
+>
+> Still usable from this entry:
+>
+> - Retrieval-cost telemetry: 5,186 `search.find` calls, 3.37 retrieval calls/query, 115 embedding tokens/call, 17,336 vector sub-searches, 61,256 returned hits, 181 ms average retrieval latency. These numbers describe OV server cost per find op and do not depend on isolation correctness.
+> - Answer-model token efficiency observations: 20.6K answer input tokens/query, ~3x Mem0's 6,956 mean tokens/query target. The conclusion that "the bottleneck is recalled-material + session-context size, not the embedding op" remains valid.
+>
+> ## Why Cat 1-4
 
 Mem0's April 2026 LoCoMo report uses the four standard recall categories:
 single-hop, multi-hop, open-domain, and temporal memory recall, and reports

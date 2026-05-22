@@ -1,5 +1,38 @@
 # 2026-05-21 — OpenViking plugin (bare): first full-eval results vs local builtin
 
+> ## ⚠️ ERRATA — 2026-05-22
+>
+> This entry's headline framing is wrong. The 70.24% score is **not a valid OV-plugin per-sample-isolated row** and must not be cited as comparable to `oc-builtin`.
+>
+> What this entry got wrong:
+>
+> 1. **Per-sample isolation collapsed at the OV side.** The plugin's intended per-sample agent scope `viking://agent/eval-locomo-ov_<oc_agent_id>/memories/` got only bootstrap template files (`identity.md` with `{{ vibe }}` placeholders, `soul.md`, `tools/memory_recall.md`). The actual extracted LoCoMo memories landed in the shared `viking://user/default/memories/` scope, merging content from all 10 samples into one knowledge graph (`entities/person/calvin.md`, `dave.md`, `jolene.md`, etc. — LoCoMo characters now sit permanently in the user's personal OV store).
+>
+> 2. **Cross-sample contamination is empirically observed, not hypothetical.** `canary.jsonl` records **23 of 37 cross-sample canaries with `leak_detected=true` — a 62% leak rate**. Example: conv-26 agent answered "When did Jon lose his banker job?" correctly with conv-30's facts; conv-30 agent answered Maria's car-donation date with conv-41 details. The contamination reached the answer model.
+>
+> 3. **The "write-verification false negative" claim below is wrong.** The probe checked the per-sample agent scope (correct location per the harness's isolation contract) and correctly found nothing — because the writes legitimately did not land there. The gate caught a real isolation failure, not a probe bug. The smoke evidence cited (`ov find "Caroline adoption"` returning hits) was queried against the shared user/default scope; finding hits there confirms the contamination problem, not the success of per-sample storage.
+>
+> 4. **Per CLAUDE.md publishability rules**, this row is invalid: "A final row is invalid if `memory_write_verification` is not configured or any selected sample lacks `write_detected=true`." All 10 samples have `write_detected=false`.
+>
+> What this entry got right:
+>
+> - The OV plugin is not inert. OV server logs show ~6,307 `search.find` operations and 640 memory extractions during the run window. The plugin engaged as a context-engine via OC lifecycle hooks; that part of "runtime evidence false negative" framing is structurally correct (OC transcripts don't capture server-side hook activity), but the manifest gate failed because the harness only accepts OC-transcript evidence by design.
+> - The retrieval-cost telemetry cited downstream (in the 2026-05-22 efficiency notes) is real and useful.
+>
+> What 70.24% actually measures:
+>
+> deepseek-v4-flash answering LoCoMo over a shared OV memory store contaminated with merged extractions from all 10 samples, plus whatever in-context conversation history each per-sample OC agent retained. It is not comparable to `oc-builtin`'s 63.54% under the isolation guarantees that benchmark assumed.
+>
+> Action items unresolved by this entry:
+>
+> - Determine whether the OV plugin's default behavior (writing extractions to user/default) violates the harness's per-sample-agent-scope assumption, or whether the plugin needs configuration to scope writes per-agent. Until resolved, no further `oc-ov-plugin-bare` runs are publishable.
+> - Reconcile the OV log counts in this entry (1,222 commits / 196 extractions, cited from claim) against independent counts (203 `session.commit ok` / 640 `Extracted N memories` in the same log window).
+> - Strengthen the `cross_scope_isolation` gate: the current synthetic canary `the_sample_specific_marker_phrase_that_should_not_cross` was never written to any scope, so the gate passed for the wrong reason. The real-content `canary.jsonl` (62% leak rate) should be promoted to a hard publishability gate.
+>
+> The original entry follows unchanged for historical reference.
+
+---
+
 ## Headline
 
 The new `oc-ov-plugin-bare` row landed at **1395 / 1986 = 70.24%** on
