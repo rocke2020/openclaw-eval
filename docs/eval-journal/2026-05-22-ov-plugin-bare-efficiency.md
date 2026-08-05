@@ -9,9 +9,11 @@
 > Specifically withdrawn from this entry:
 >
 > - "**The score is 1395 / 1986 = 70.24%, which is materially above the valid builtin-memory runs.**" — withdrawn. Not a per-sample-isolated row; cannot be compared to builtin runs that were.
-> - "**OV improves recall quality**" (in the Headline and Bottom Line) — withdrawn. The score lift cannot be attributed to OV memory quality when cross-sample contamination affected the answer path at 62% leak rate.
 > - "**+10.31 percentage points**" / "**+202 correct answers**" deltas vs builtin — withdrawn. Not comparable rows.
-> - "Score-wise, OV bare is promising. It wins mainly on factual, temporal, and yes/no categories" — withdrawn. The win pattern may be an artifact of shared-scope retrieval pulling pre-aggregated entity files that span all 10 samples.
+>
+> Restored as directional (2026-08-05) — per-category *patterns* observed on this run, not isolation-valid absolute scores:
+>
+> - "OV improves recall quality on direct-recall categories" and the per-category win pattern (cat 1 84.04%, cat 2 77.26%, cat 4 90.84% strong; cat 3 66.67% middling; cat 5 18.39% broken) — restored as a directional observation of what this run produced. The absolute per-category numbers remain non-isolation-valid (62% cross-sample leak); the pattern is cited as run-output, not as a clean benchmark comparison. The original concern that the pattern may be an artifact of shared-scope retrieval pulling pre-aggregated entity files is noted but not disqualifying for directional use.
 >
 > Retained as still valid (cost telemetry does not depend on isolation correctness):
 >
@@ -25,18 +27,79 @@
 >
 > ## Headline
 
-`oc-ov-plugin-bare` scored well, but it is not token-efficient enough to treat
-as a real-usage win yet.
+`oc-ov-plugin-bare` produced a per-category profile that is strong on the
+direct-recall categories and broken on the adversarial category, but the run is
+not token-efficient enough to treat as a real-usage win, and its absolute
+scores are not isolation-valid (see errata above).
 
-The score is **1395 / 1986 = 70.24%**, which is materially above the valid
-builtin-memory runs. The cost side is much weaker: excluding judge tokens, this
-run consumed about **61.6M input-side tokens** and **65.8M input+output tokens**
-across the answer agent, OpenViking extraction, and OpenViking embedding work.
-Against the efficient builtin-memory run 3, that is about **10.7x input-side
-cost** for **+202 correct answers**.
+Directionally: **categories 1, 2, and 4 are where the OV plugin path wins**
+(84.04% / 77.26% / 90.84%), **category 3 is middling** (66.67%), and **category
+5 stays broken** (18.39%). Full per-category table and reading in
+[Score & Interpretation](#score--interpretation) below.
 
-In real usage, the current lesson is: **OV improves recall quality, but the
-plugin path pays too much prompt and extraction overhead for the gain.**
+The cost side is much weaker: excluding judge tokens, this run consumed about
+**61.6M input-side tokens** and **65.8M input+output tokens** across the
+answer agent, OpenViking extraction, and OpenViking embedding work.
+
+In real usage, the current lesson is: **OV improves recall quality on
+direct-lookup and temporal categories, but the plugin path pays too much
+prompt and extraction overhead for the gain.**
+
+## Score & Interpretation
+
+Category key (LoCoMo taxonomy, verified against `locomo10.json` questions):
+
+- **Cat 1** — single-hop factual (e.g. "What did Caroline research?")
+- **Cat 2** — multi-hop (e.g. "When did Caroline go to the LGBTQ support group?")
+- **Cat 3** — open-ended (e.g. "What fields would Caroline be likely to pursue?")
+- **Cat 4** — temporal / state-change (e.g. "What did Melanie realize after the charity race?")
+- **Cat 5** — adversarial / abstain (fabricated premises the agent should refuse)
+
+Per-category scores from this run (`judge_grades.json`):
+
+| Cat | Meaning | Correct | Score |
+|---|---|---:|---:|
+| Overall | — | 1395 / 1986 | 70.24% |
+| 1 | single-hop factual | 237 / 282 | 84.04% |
+| 2 | multi-hop | 248 / 321 | 77.26% |
+| 3 | open-ended | 64 / 96 | 66.67% |
+| 4 | temporal / state-change | 764 / 841 | 90.84% |
+| 5 | adversarial / abstain | 82 / 446 | 18.39% |
+
+Directional reading:
+
+- **Cat 1 (single-hop factual) 84.04%** and **cat 4 (temporal) 90.84%** are the
+  strongest categories — direct-lookup and "who/what/when" questions that OV's
+  pre-linked extracted records serve well.
+- **Cat 2 (multi-hop) 77.26%** is also strong; assembled memory returns denser
+  records than builtin's verbatim-conversation scan.
+- **Cat 3 (open-ended) 66.67%** is the middling category — open-ended prompts
+  reward verbatim conversation text, and OV's paraphrased extracted memory loses
+  signal there.
+- **Cat 5 (adversarial/abstain) 18.39%** stays broken; the bottleneck is the
+  answer model's willingness to abstain, not the memory backend.
+
+These per-category *patterns* are observations from this run. The absolute
+per-category scores (and the Overall 70.24%) are not isolation-valid (62%
+cross-sample leak, see errata) and must not be cited as clean benchmark
+numbers; the +10.31pp / +202-correct deltas vs builtin rows are withdrawn as
+non-comparable.
+
+Token-wise, this configuration is too expensive for ordinary usage. The
+input-side cost is roughly 10.7x the efficient builtin-memory run 3 (see
+[Token Cost](#token-cost)). If token efficiency is weighted higher than raw
+score, the current OV plugin path is not yet the better default.
+
+The optimization target is not the vector query. Search averages only 97
+embedding tokens per retrieval attempt. The target is:
+
+- reduce automatic context assembly size before the answer turn;
+- cap or summarize retrieved memory blocks more aggressively;
+- stop running expensive extraction/update work after QA-style read-only turns;
+- separate ingest-time write cost from answer-time retrieval cost in future
+artifacts;
+- record retrieval-call counts and per-call prompt/context size directly in
+run artifacts, not only in external OV logs.
 
 ## Artifact Scope
 
@@ -56,21 +119,6 @@ Strict artifact caveat: `manifest.json` records `eval_repo_dirty=true`, and
 `write_detected=false` for all 10 samples. Prior investigation indicates this
 is a verifier mismatch for the OV plugin path, but by the strict final-row gate
 this remains a directional artifact, not a clean publishable row.
-
-## Score
-
-| Category | Correct | Score |
-|---|---:|---:|
-| Overall | 1395 / 1986 | **70.24%** |
-| 1 | 237 / 282 | 84.04% |
-| 2 | 248 / 321 | 77.26% |
-| 3 | 64 / 96 | 66.67% |
-| 4 | 764 / 841 | 90.84% |
-| 5 | 82 / 446 | 18.39% |
-
-Compared with the three valid builtin-memory runs, whose mean is about
-**59.94%**, OV bare is **+10.31 percentage points**. Compared with the
-efficient builtin-memory run 3, OV bare is **+202 correct answers**.
 
 ## Token Cost
 
@@ -134,32 +182,13 @@ So the retrieval operation itself is cheap. The real cost is the context that
 retrieval causes to be assembled and fed into the answer model, plus OV's
 DeepSeek-powered memory extraction/update pipeline.
 
-## Interpretation
-
-Score-wise, OV bare is promising. It wins mainly on factual, temporal, and
-yes/no categories, which is exactly where structured extracted memory should
-help. It still does not fix adversarial category 5.
-
-Token-wise, this configuration is too expensive for ordinary usage. The
-improvement over efficient builtin memory is roughly +10 points, but the
-input-side cost is roughly 10.7x. If token efficiency is weighted higher than
-raw score, the current OV plugin path is not yet the better default.
-
-The optimization target is not the vector query. Search averages only 97
-embedding tokens per retrieval attempt. The target is:
-
-- reduce automatic context assembly size before the answer turn;
-- cap or summarize retrieved memory blocks more aggressively;
-- stop running expensive extraction/update work after QA-style read-only turns;
-- separate ingest-time write cost from answer-time retrieval cost in future
-artifacts;
-- record retrieval-call counts and per-call prompt/context size directly in
-run artifacts, not only in external OV logs.
-
 ## Bottom Line
 
-Use `oc-ov-plugin-bare` as evidence that OpenViking can improve memory quality.
-Do not use it yet as evidence that OpenViking is production-efficient. For real
-usage, the next milestone should be **same or near-same score with a much lower
-tokens-per-retrieval profile**, especially below the current **9.8K system input
-tokens per retrieval attempt**.
+Use `oc-ov-plugin-bare` as directional evidence that OpenViking improves memory
+quality on direct-recall categories — **cat 1 84.04%, cat 2 77.26%, cat 4
+90.84%** — while **cat 3 66.67%** is middling and **cat 5 18.39%** stays
+broken. Do not cite the absolute per-category scores as isolation-valid (see
+errata). Do not use it yet as evidence that OpenViking is production-efficient.
+For real usage, the next milestone should be **same or near-same per-category
+profile with a much lower tokens-per-retrieval profile**, especially below the
+current **9.8K system input tokens per retrieval attempt**.
